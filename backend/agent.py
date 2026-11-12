@@ -431,6 +431,37 @@ async def entrypoint(ctx: JobContext) -> None:
 
     santa_agent = SantaClausAgent(note=note, room=ctx.room)
 
+    # 사용자/산타 대화가 추가될 때마다 프론트엔드 실시간 자막 및 대화록('santa-transcript' 토픽)으로 즉시 전송
+    @session.on("conversation_item_added")
+    def _on_conversation_item_added(event: Any) -> None:
+        try:
+            item = getattr(event, "item", None)
+            if not item:
+                return
+            role = getattr(item, "role", "")
+            text_content = getattr(item, "text_content", None)
+            if callable(text_content):
+                text_content = text_content()
+            if not text_content:
+                content_list = getattr(item, "content", [])
+                if isinstance(content_list, list):
+                    text_content = " ".join([str(c) for c in content_list if isinstance(c, str)])
+            text_str = str(text_content or "").strip()
+            if not text_str:
+                return
+
+            speaker = "santa" if role == "assistant" else "child"
+            packet = json.dumps({"speaker": speaker, "text": text_str}, ensure_ascii=False).encode("utf-8")
+            asyncio.create_task(
+                ctx.room.local_participant.publish_data(
+                    packet,
+                    reliable=True,
+                    topic="santa-transcript",
+                )
+            )
+        except Exception as exc:
+            logger.debug("Could not publish santa-transcript packet: %s", exc)
+
     # 사용자 발화 시 백그라운드 선물 키워드 추출 연결
     @session.on("user_input_transcribed")
     def _on_user_transcribed(event: Any) -> None:
