@@ -482,7 +482,27 @@ async def entrypoint(ctx: JobContext) -> None:
     )
 
 
+def _cleanup_stale_agent_workers() -> None:
+    """새 워커를 시작하기 전에 이전에 남아 있던 좀비/중복 agent.py 워커 프로세스를 자동 정리합니다."""
+    try:
+        import psutil  # type: ignore
+
+        current_proc = psutil.Process(os.getpid())
+        ancestors = {p.pid for p in current_proc.parents()}
+        for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+            pid = proc.info.get("pid")
+            if not pid or pid == current_proc.pid or pid in ancestors:
+                continue
+            cmdline = " ".join(proc.info.get("cmdline") or []).lower()
+            if "agent.py" in cmdline and ("dev" in cmdline or "start" in cmdline):
+                logger.info("Terminating stale Santa agent worker process (PID=%s)", pid)
+                proc.kill()
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
+    _cleanup_stale_agent_workers()
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,
