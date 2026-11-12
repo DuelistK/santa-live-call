@@ -192,6 +192,7 @@ class AvatarFactory:
             from livekit.plugins import anam  # type: ignore
 
             avatar = anam.AvatarSession(
+                api_key=api_key,
                 persona_config=anam.PersonaConfig(
                     name="Santa",
                     avatarId=avatar_id,
@@ -391,15 +392,19 @@ async def entrypoint(ctx: JobContext) -> None:
         model="nova-2",
         language="ko",
         smart_format=True,
+        api_key=os.getenv("DEEPGRAM_API_KEY"),
     )
 
     # - LLM: Google Gemini 2.5 Flash (초저지연 대화 응답)
     llm_engine = google.LLM(
         model="gemini-2.5-flash",
         temperature=0.7,
+        api_key=os.getenv("GOOGLE_API_KEY"),
     )
 
     # - TTS: ElevenLabs 인자한 할아버지 목소리 & 다국어/한국어 초저지연 스트리밍 모델
+    # (livekit-plugins-elevenlabs는 기본적으로 ELEVEN_API_KEY를 찾으므로 ELEVENLABS_API_KEY를 명시 전달)
+    eleven_api_key = os.getenv("ELEVENLABS_API_KEY") or os.getenv("ELEVEN_API_KEY")
     raw_voice_id = os.getenv("ELEVENLABS_VOICE_ID", "").strip()
     voice_id = (
         raw_voice_id
@@ -407,6 +412,7 @@ async def entrypoint(ctx: JobContext) -> None:
         else "pNInz6obpgDQGcFmaJgB"
     )
     tts_engine = elevenlabs.TTS(
+        api_key=eleven_api_key,
         voice_id=voice_id,
         model="eleven_flash_v2_5",
         language="ko",
