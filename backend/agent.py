@@ -45,6 +45,18 @@ def _configure_windows_ca_bundle() -> None:
 
         os.environ["SSL_CERT_FILE"] = bundle_path
         os.environ["REQUESTS_CA_BUNDLE"] = bundle_path
+
+        # Python 3.14 OpenSSL VERIFY_X509_STRICT 플래그가 사내 루트 인증서의 Missing Authority Key Identifier를
+        # 거부하지 않도록 기본 SSLContext 생성 시 VERIFY_X509_STRICT 플래그를 해제합니다.
+        _orig_create_default_context = ssl.create_default_context
+
+        def _relaxed_create_default_context(*args: Any, **kwargs: Any) -> ssl.SSLContext:
+            ctx = _orig_create_default_context(*args, **kwargs)
+            if hasattr(ssl, "VERIFY_X509_STRICT"):
+                ctx.verify_flags &= ~ssl.VERIFY_X509_STRICT
+            return ctx
+
+        ssl.create_default_context = _relaxed_create_default_context  # type: ignore
     except Exception:
         pass
 
