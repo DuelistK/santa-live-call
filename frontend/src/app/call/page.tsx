@@ -83,8 +83,9 @@ function ChildFrontCameraPip({ videoEnabled }: { videoEnabled: boolean }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [hasCamera, setHasCamera] = useState(false);
 
+  // Stream이 연결된 이후에<video> 태그가 마운트되므로 srcObject를 두 번째 useEffect에서 확실히 바인딩
   useEffect(() => {
-    let stream: MediaStream | null = null;
+    let activeStream: MediaStream | null = null;
     if (!videoEnabled) {
       setHasCamera(false);
       return;
@@ -93,10 +94,11 @@ function ChildFrontCameraPip({ videoEnabled }: { videoEnabled: boolean }) {
     navigator.mediaDevices
       ?.getUserMedia({ video: { facingMode: "user" }, audio: false })
       .then((mediaStream) => {
-        stream = mediaStream;
+        activeStream = mediaStream;
         setHasCamera(true);
         if (videoRef.current) {
           videoRef.current.srcObject = mediaStream;
+          videoRef.current.play().catch(() => {});
         }
       })
       .catch(() => {
@@ -104,9 +106,23 @@ function ChildFrontCameraPip({ videoEnabled }: { videoEnabled: boolean }) {
       });
 
     return () => {
-      stream?.getTracks().forEach((t) => t.stop());
+      activeStream?.getTracks().forEach((t) => t.stop());
     };
   }, [videoEnabled]);
+
+  useEffect(() => {
+    if (hasCamera && videoRef.current && !videoRef.current.srcObject) {
+      navigator.mediaDevices
+        ?.getUserMedia({ video: { facingMode: "user" }, audio: false })
+        .then((mediaStream) => {
+          if (videoRef.current) {
+            videoRef.current.srcObject = mediaStream;
+            videoRef.current.play().catch(() => {});
+          }
+        })
+        .catch(() => {});
+    }
+  }, [hasCamera]);
 
   return (
     <div className="relative w-24 h-32 rounded-2xl overflow-hidden border-2 border-amber-400/80 shadow-xl bg-slate-900/95">
@@ -159,10 +175,6 @@ function LiveKitActiveStage({
   useEffect(() => {
     localParticipant.setMicrophoneEnabled(micEnabled).catch(() => {});
   }, [localParticipant, micEnabled]);
-
-  useEffect(() => {
-    localParticipant.setCameraEnabled(camEnabled).catch(() => {});
-  }, [localParticipant, camEnabled]);
 
   useEffect(() => {
     const sendFn = (text: string) => {
@@ -383,7 +395,7 @@ export default function CallPage() {
           token={connDetails.participantToken}
           connect={true}
           audio={micEnabled}
-          video={camEnabled}
+          video={false}
           className="absolute inset-0 z-10 pointer-events-none"
         >
           <RoomAudioRenderer />

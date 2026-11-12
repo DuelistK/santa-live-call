@@ -48,13 +48,6 @@ def _configure_windows_ca_bundle() -> None:
     except Exception:
         pass
 
-    try:
-        import truststore  # type: ignore
-
-        truststore.inject_into_ssl()
-    except Exception:
-        pass
-
 
 _configure_windows_ca_bundle()
 
@@ -69,7 +62,8 @@ from livekit.agents import (
     cli,
     function_tool,
 )
-from livekit.plugins import deepgram, elevenlabs, google, silero
+# 주의: LiveKit 플러그인들은 반드시 메인 스레드(파일 최상단)에서 import 해야 워커에 정상 등록됩니다!
+from livekit.plugins import anam, deepgram, elevenlabs, google, lemonslice, liveavatar, silero
 
 load_dotenv()
 
@@ -189,8 +183,6 @@ class AvatarFactory:
             return None
 
         try:
-            from livekit.plugins import anam  # type: ignore
-
             avatar = anam.AvatarSession(
                 api_key=api_key,
                 persona_config=anam.PersonaConfig(
@@ -216,8 +208,6 @@ class AvatarFactory:
             return None
 
         try:
-            from livekit.plugins import lemonslice  # type: ignore
-
             kwargs: dict[str, Any] = {"api_key": api_key}
             if avatar_id and not avatar_id.startswith("your_"):
                 kwargs["agent_id"] = avatar_id
@@ -244,8 +234,6 @@ class AvatarFactory:
             return None
 
         try:
-            from livekit.plugins import liveavatar  # type: ignore
-
             return liveavatar.AvatarSession(
                 api_key=api_key,
                 avatar_id=avatar_id,
@@ -317,48 +305,50 @@ class SantaClausAgent(Agent):
 
 
 # =====================================================================
-# 5. 백그라운드 선물 키워드 추출기 (Gemini 2.5 Flash 보조 분석)
+# 5. 백그라운드 선물 키워드 추출기 (초경량 비블로킹 키워드 매칭)
 # =====================================================================
+GIFT_CANDIDATE_KEYWORDS = (
+    "레고",
+    "소방차",
+    "로봇",
+    "카봇",
+    "티니핑",
+    "하츄핑",
+    "인형",
+    "자전거",
+    "킥보드",
+    "닌텐도",
+    "게임기",
+    "공룡",
+    "변신",
+    "자동차",
+    "블록",
+    "색연필",
+    "그림책",
+    "축구공",
+)
+
+
 async def extract_gift_keywords_in_background(
     utterance: str,
     santa_agent: SantaClausAgent,
 ) -> None:
     """
-    아이의 발화 텍스트가 들어올 때마다 비동기로 선물 키워드를 빠르게 점검하여
-    Tool 호출이 누락되더라도 부모 리포트에 선물 후보가 기록되도록 보완합니다.
+    아이의 발화 텍스트에서 선물 후보 키워드를 이벤트 루프 블로킹 없이 즉시 감지합니다.
+    (구체적인 선물 요약은 산타 에이전트의 record_child_gift_wish 함수 도구가 함께 처리합니다.)
     """
     text = utterance.strip()
     if len(text) < 2:
         return
 
-    google_api_key = os.getenv("GOOGLE_API_KEY", "")
-    if not google_api_key or google_api_key.startswith("your_"):
-        return
+    updated = False
+    for kw in GIFT_CANDIDATE_KEYWORDS:
+        if kw in text and kw not in santa_agent.report.detectedGifts:
+            santa_agent.report.detectedGifts.append(kw)
+            updated = True
 
-    try:
-        from google import genai  # type: ignore
-
-        gemini_model = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite").strip()
-        client = genai.Client(api_key=google_api_key)
-        prompt = (
-            "다음은 어린이가 산타할아버지와 영상통화하며 한 말입니다. "
-            "어린이가 받고 싶어 하는 '선물 품목/장난감/물건'이 포함되어 있다면 명사 키워드만 쉼표로 구분해 출력하고, "
-            "없다면 'NONE'만 출력하세요.\n\n"
-            f"어린이 발화: \"{text}\""
-        )
-        response = await asyncio.to_thread(
-            client.models.generate_content,
-            model=gemini_model,
-            contents=prompt,
-        )
-        extracted = (response.text or "").strip()
-        if extracted and extracted.upper() != "NONE":
-            for item in [x.strip() for x in extracted.split(",") if x.strip()]:
-                if item not in santa_agent.report.detectedGifts:
-                    santa_agent.report.detectedGifts.append(item)
-            await santa_agent.publish_report_to_frontend()
-    except Exception as exc:
-        logger.debug("Background gift extraction skipped: %s", exc)
+    if updated:
+        await santa_agent.publish_report_to_frontend()
 
 
 # =====================================================================
@@ -453,7 +443,12 @@ async def entrypoint(ctx: JobContext) -> None:
         except Exception as exc:
             logger.warning("Failed to handle child-chat data packet: %s", exc)
 
-    # 3. 실시간 아바타 세션 시작 (Anam 기본 / LemonSlice / HeyGen 스위칭)
+    # 3. AgentSession 먼저 시작 후 실시간 아바타 세션 연결
+    await session.start(
+        agent=santa_agent,
+        room=ctx.room,
+    )
+
     avatar = AvatarFactory.create_avatar_session(override_provider=note.avatarProvider)
     if avatar is not None:
         try:
@@ -461,12 +456,6 @@ async def entrypoint(ctx: JobContext) -> None:
             logger.info("Real-time Santa avatar session started successfully.")
         except Exception as exc:
             logger.error("Avatar session failed to start; continuing with voice session: %s", exc)
-
-    # 4. AgentSession 시작
-    await session.start(
-        agent=santa_agent,
-        room=ctx.room,
-    )
 
     # 초기 리포트 상태 프론트엔드 동기화
     await santa_agent.publish_report_to_frontend()
