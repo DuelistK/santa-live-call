@@ -1,3 +1,4 @@
+# 실시간 WebRTC(LiveKit) 기반 AI 산타할아버지 음성·아바타 에이전트 서버
 """
 Santa Live Call MVP — Real-time AI Santa Claus Agent (LiveKit Agents 1.x)
 
@@ -503,15 +504,24 @@ async def entrypoint(ctx: JobContext) -> None:
     # 초기 리포트 상태 프론트엔드 동기화
     await santa_agent.publish_report_to_frontend()
 
-    # 5. 통화 연결 직후 산타가 먼저 아이의 이름을 부르며 반갑게 첫인사!
-    await session.generate_reply(
-        instructions=(
+    # 5. 통화 연결 직후 산타가 먼저 반갑게 첫인사 (이름 미설정 시 통화 중 자연스럽게 이름 물어보기)
+    is_generic_name = note.childName in ("착한 어린이", "우리 아이", "아이", "")
+    if is_generic_name:
+        opening_instructions = (
+            "방금 영상 통화가 연결되었습니다! "
+            "'호호호! 안녕! 북극 산타 마을에서 산타할아버지가 전화했단다!'라고 반갑게 인사한 뒤, "
+            "'할아버지가 마법 수첩에서 찾으려는데, 우리 멋진 친구 이름이 무엇이니?'라고 "
+            "1~2문장으로 다정하게 물어보세요. 이후 아이가 이름을 말하면 그 이름을 계속 불러주세요."
+        )
+    else:
+        opening_instructions = (
             f"방금 영상 통화가 연결되었습니다! "
             f"'호호호! 우리 {note.childName} 어린이, 안녕! 북극 산타 마을에서 산타할아버지가 전화했단다!'라고 "
             f"아이의 이름({note.childName})을 다정하게 부르며 시작하고, "
             f"올해 '{note.praise}' 한 모습을 마법 수첩에서 봤다고 1~2문장으로 따뜻하게 첫인사를 건네세요."
         )
-    )
+
+    await session.generate_reply(instructions=opening_instructions)
 
 
 def _cleanup_stale_agent_workers() -> None:

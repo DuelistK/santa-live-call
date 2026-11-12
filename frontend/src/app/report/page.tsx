@@ -1,33 +1,36 @@
 "use client";
-// 통화 종료 후 아이가 말한 선물 키워드, 착한 어린이 인증서, 쇼핑 검색 및 통화권 패키지를 제공하는 리포트 화면
+// 통화 종료 후 산타와의 대화 요약, 선물 키워드 및 다시 전화하기 기능을 제공하는 화면
 
-import React from "react";
+import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  Phone,
   Gift,
-  Sparkles,
   CheckCircle2,
-  MessageCircleHeart,
   Clock,
-  RotateCcw,
-  PhoneCall,
-  Award,
-  ShoppingBag,
+  ChevronDown,
+  ChevronUp,
   ExternalLink,
-  Home,
-  Ticket,
+  ArrowLeft,
 } from "lucide-react";
 import { useSantaSession } from "@/context/SantaSessionContext";
 
 export default function ReportPage() {
   const router = useRouter();
   const { note, report } = useSantaSession();
+  const [showTranscript, setShowTranscript] = useState(false);
 
-  const childDisplayName = report.childName || note.childName || "지우";
+  const childDisplayName =
+    report.childName && report.childName !== "우리 아이"
+      ? report.childName
+      : note.childName && note.childName !== "우리 아이"
+      ? note.childName
+      : "우리 아이";
+
   const gifts =
     report.detectedGifts && report.detectedGifts.length > 0
       ? report.detectedGifts
-      : [note.giftHint || "레고 시티 소방차 세트"];
+      : [note.giftHint || "크리스마스 깜짝 선물"];
 
   const primaryGift = gifts[0];
   const naverShoppingUrl = `https://search.shopping.naver.com/search/all?query=${encodeURIComponent(
@@ -37,205 +40,184 @@ export default function ReportPage() {
     primaryGift
   )}`;
 
+  const minutes = Math.floor(report.callDurationSec / 60);
+  const seconds = report.callDurationSec % 60;
+  const durationLabel =
+    minutes > 0 ? `${minutes}분 ${seconds}초 통화` : `${seconds}초 통화`;
+
   return (
-    <div className="flex-1 flex flex-col justify-between bg-gradient-to-b from-[#131F3E] via-[#0F172A] to-[#090D1A] text-slate-100 overflow-y-auto">
-      {/* 상단 리포트 헤더 */}
-      <header className="px-5 pt-5 pb-4 border-b border-white/10 bg-gradient-to-r from-emerald-950/70 via-slate-900 to-red-950/60">
-        <div className="flex items-center justify-between mb-2">
-          <button
-            type="button"
-            onClick={() => router.push("/")}
-            className="inline-flex items-center gap-1 text-xs text-slate-300 hover:text-white transition"
-          >
-            <Home className="w-3.5 h-3.5" />
-            <span>홈으로</span>
-          </button>
+    <div className="relative flex-1 flex flex-col justify-between bg-[#0A0F1D] text-[#F9F6F0] px-7 pt-7 pb-9 overflow-y-auto select-none">
+      {/* 은은한 상단 배경 조명 */}
+      <div className="pointer-events-none absolute -top-32 left-1/2 -translate-x-1/2 w-80 h-80 rounded-full bg-[#9E1B20]/15 blur-[95px]" />
 
-          <span className="inline-flex items-center gap-1 text-xs text-slate-300 font-mono">
-            <Clock className="w-3.5 h-3.5 text-amber-400" />
-            {Math.floor(report.callDurationSec / 60)}분 {report.callDurationSec % 60}초 통화 완료
-          </span>
-        </div>
+      {/* 상단 내비게이션 */}
+      <header className="relative z-10 flex items-center justify-between">
+        <button
+          type="button"
+          onClick={() => router.push("/")}
+          className="inline-flex items-center gap-1.5 text-xs font-medium text-[#F9F6F0]/70 hover:text-[#F9F6F0] transition"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          <span>홈으로</span>
+        </button>
 
-        <div className="flex items-center justify-between">
-          <div>
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-400/15 text-emerald-300 border border-emerald-400/30 mb-1">
-              <Sparkles className="w-3 h-3" />
-              부모님 전용 · 북극 통화 분석 리포트
-            </span>
-            <h1 className="text-xl font-extrabold text-white tracking-tight">
-              🎁 산타의 비밀 리포트
-            </h1>
-          </div>
-          <div className="w-11 h-11 rounded-2xl bg-amber-400/15 border border-amber-400/40 flex items-center justify-center text-2xl">
-            📜
-          </div>
+        <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/[0.04] border border-white/[0.08] text-xs text-[#F9F6F0]/75">
+          <Clock className="w-3.5 h-3.5 text-[#D4AF37]" />
+          <span>{durationLabel}</span>
         </div>
       </header>
 
-      {/* 본문 영역 */}
-      <div className="flex-1 px-5 py-4 space-y-3.5">
-        {/* 1. 북극 공식 '착한 어린이 인증서' 상장 카드 */}
-        <section className="relative p-4 rounded-2xl bg-gradient-to-br from-[#2B1D14] via-[#1E162B] to-[#111827] border-2 border-amber-400/70 shadow-xl overflow-hidden">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-[10px] font-extrabold tracking-wider uppercase px-2 py-0.5 rounded bg-amber-400 text-slate-950">
-              NORTH POLE OFFICIAL CERTIFICATE
-            </span>
-            <span className="text-xs font-bold text-amber-300 flex items-center gap-1">
-              <Award className="w-4 h-4 text-amber-400" />
-              착한 어린이 임명장
-            </span>
+      {/* 본문 콘텐츠 */}
+      <main className="relative z-10 my-auto py-6 space-y-6">
+        {/* 타이틀 & 산타 코멘트 */}
+        <section className="text-center space-y-2">
+          <div className="mx-auto w-16 h-16 rounded-full bg-[#111827] border border-[#D4AF37]/60 flex items-center justify-center text-3xl shadow-lg mb-3">
+            🎅
+          </div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[#D4AF37]">
+            Call Summary
+          </p>
+          <h1 className="text-2xl font-bold tracking-tight text-[#F9F6F0]">
+            산타할아버지와의 통화 완료
+          </h1>
+          <p className="text-xs text-[#F9F6F0]/65 leading-relaxed max-w-[300px] mx-auto pt-1">
+            {report.santaComment}
+          </p>
+        </section>
+
+        {/* 정제된 단일 요약 카드 */}
+        <section className="rounded-3xl bg-[#111827] border border-white/[0.08] p-5 space-y-4 shadow-xl">
+          {/* 1. 소원 선물 키워드 */}
+          <div className="space-y-2.5">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-[#F9F6F0]/60 flex items-center gap-1.5">
+                <Gift className="w-3.5 h-3.5 text-[#D4AF37]" />
+                <span>이야기 나눈 선물</span>
+              </span>
+              <span className="text-[11px] text-[#D4AF37] font-medium">
+                {childDisplayName}
+              </span>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              {gifts.map((gift, idx) => (
+                <span
+                  key={`${gift}-${idx}`}
+                  className="px-3.5 py-1.5 rounded-full bg-[#0A0F1D] border border-[#D4AF37]/45 text-xs font-semibold text-[#F9F6F0]"
+                >
+                  {gift}
+                </span>
+              ))}
+            </div>
+
+            {/* 부모님을 위한 절제된 선물 검색 링크 */}
+            <div className="flex items-center gap-3 pt-1 text-[11px] text-[#F9F6F0]/55">
+              <a
+                href={coupangSearchUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 hover:text-[#D4AF37] transition"
+              >
+                <span>쿠팡에서 선물 보기</span>
+                <ExternalLink className="w-3 h-3" />
+              </a>
+              <span className="text-white/15">·</span>
+              <a
+                href={naverShoppingUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 hover:text-[#D4AF37] transition"
+              >
+                <span>네이버 쇼핑 검색</span>
+                <ExternalLink className="w-3 h-3" />
+              </a>
+            </div>
           </div>
 
-          <div className="text-center py-2 space-y-1">
-            <div className="text-base font-extrabold text-white">
-              위 어린이: <span className="text-amber-300 underline underline-offset-4">{childDisplayName}</span> ({note.childAge}세)
-            </div>
-            <p className="text-[11px] text-slate-200 leading-relaxed">
-              올 한 해 <strong className="text-amber-200">&ldquo;{note.praise}&rdquo;</strong> 모습을 보여주었으며, 산타할아버지와{" "}
-              <strong className="text-emerald-300">&ldquo;{note.mission}&rdquo;</strong> 약속을 씩씩하게 다짐하였기에 북극 공식 착한 어린이로 임명합니다.
+          <div className="border-t border-white/[0.07]" />
+
+          {/* 2. 산타와의 약속 */}
+          <div className="space-y-1.5">
+            <span className="text-xs font-medium text-[#F9F6F0]/60 flex items-center gap-1.5">
+              <CheckCircle2 className="w-3.5 h-3.5 text-[#D4AF37]" />
+              <span>산타와 약속한 습관</span>
+            </span>
+            <p className="text-xs text-[#F9F6F0]/90 leading-relaxed">
+              {report.missionPromise}
             </p>
           </div>
 
-          <div className="mt-2 pt-2 border-t border-amber-400/20 flex items-center justify-between text-[10px] text-amber-200/80">
-            <span>발급처: 북극 산타 마을 중앙 본부</span>
-            <span className="font-bold text-amber-300">🎅 산타할아버지 (인)</span>
-          </div>
-        </section>
+          <div className="border-t border-white/[0.07]" />
 
-        {/* 2. 아이가 말한 받고 싶은 선물 하이라이트 & 최저가 바로 구매 */}
-        <section className="p-4 rounded-2xl bg-gradient-to-br from-amber-500/15 via-red-900/25 to-slate-900 border border-amber-400/40 shadow-lg space-y-2.5">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
-              <Gift className="w-4 h-4 text-amber-400" />
-              대화 중 포착된 희망 선물 키워드
+          {/* 3. 대화 요약 */}
+          <div className="space-y-1.5">
+            <span className="text-xs font-medium text-[#F9F6F0]/60">
+              오늘의 대화 요약
             </span>
-            <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-400/20 text-amber-200 font-semibold">
-              AI 실시간 추출
-            </span>
-          </div>
-
-          <div className="flex flex-wrap gap-2">
-            {gifts.map((gift, idx) => (
-              <span
-                key={`${gift}-${idx}`}
-                className="px-3 py-1.5 rounded-xl bg-amber-400 text-slate-950 font-extrabold text-xs shadow-sm flex items-center gap-1.5"
-              >
-                <span>🎄</span>
-                <span>{gift}</span>
-              </span>
-            ))}
-          </div>
-
-          {/* 제휴 커머스 바로가기 버튼 (BM 연동) */}
-          <div className="pt-1.5 grid grid-cols-2 gap-2">
-            <a
-              href={coupangSearchUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="py-2 px-3 rounded-xl bg-red-600/90 hover:bg-red-500 text-white font-bold text-[11px] flex items-center justify-center gap-1.5 transition"
-            >
-              <ShoppingBag className="w-3.5 h-3.5" />
-              <span>쿠팡 최저가 찾기</span>
-              <ExternalLink className="w-3 h-3 opacity-80" />
-            </a>
-            <a
-              href={naverShoppingUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="py-2 px-3 rounded-xl bg-emerald-600/90 hover:bg-emerald-500 text-white font-bold text-[11px] flex items-center justify-center gap-1.5 transition"
-            >
-              <ShoppingBag className="w-3.5 h-3.5" />
-              <span>네이버 쇼핑 검색</span>
-              <ExternalLink className="w-3 h-3 opacity-80" />
-            </a>
-          </div>
-        </section>
-
-        {/* 3. 대화 요약 & 생활 습관 약속 결과 */}
-        <section className="p-3.5 rounded-2xl bg-slate-900/90 border border-slate-800 space-y-2.5">
-          <div>
-            <h2 className="text-xs font-bold text-sky-300 flex items-center gap-1.5 mb-1">
-              <MessageCircleHeart className="w-4 h-4 text-sky-400" />
-              오늘의 영상 통화 요약
-            </h2>
-            <p className="text-xs text-slate-200 leading-relaxed">
+            <p className="text-xs text-[#F9F6F0]/80 leading-relaxed">
               {report.conversationSummary}
             </p>
           </div>
 
-          <div className="pt-2 border-t border-slate-800">
-            <h3 className="text-xs font-bold text-emerald-300 flex items-center gap-1.5 mb-1">
-              <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-              손가락 걸고 다짐한 약속 미션
-            </h3>
-            <p className="text-xs text-slate-200 leading-relaxed">
-              {report.missionPromise}
-            </p>
-          </div>
-        </section>
+          {/* 4. 대화 기록 토글 */}
+          {report.transcript && report.transcript.length > 0 && (
+            <div className="pt-1">
+              <button
+                type="button"
+                onClick={() => setShowTranscript((v) => !v)}
+                className="w-full flex items-center justify-between py-2 px-3 rounded-xl bg-[#0A0F1D]/70 hover:bg-[#0A0F1D] border border-white/[0.06] text-xs text-[#F9F6F0]/70 transition"
+              >
+                <span>대화 내용 보기 ({report.transcript.length}건)</span>
+                {showTranscript ? (
+                  <ChevronUp className="w-4 h-4 text-[#D4AF37]" />
+                ) : (
+                  <ChevronDown className="w-4 h-4 text-[#D4AF37]" />
+                )}
+              </button>
 
-        {/* 4. 주요 대화 로그 하이라이트 */}
-        {report.transcript && report.transcript.length > 0 && (
-          <section className="p-3.5 rounded-2xl bg-slate-900/70 border border-slate-800/90">
-            <h3 className="text-xs font-bold text-slate-300 mb-2">
-              📝 실시간 통화 대화록 ({report.transcript.length}건)
-            </h3>
-            <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
-              {report.transcript.map((turn) => (
-                <div
-                  key={turn.id}
-                  className={`p-2 rounded-xl text-xs leading-relaxed ${
-                    turn.speaker === "santa"
-                      ? "bg-red-950/40 border border-red-500/20 text-slate-100"
-                      : "bg-sky-950/40 border border-sky-500/20 text-sky-100"
-                  }`}
-                >
-                  <span className="font-bold mr-1.5">
-                    {turn.speaker === "santa" ? "🎅 산타:" : `🧒 ${childDisplayName}:`}
-                  </span>
-                  <span>{turn.text}</span>
+              {showTranscript && (
+                <div className="mt-2.5 space-y-2 max-h-44 overflow-y-auto pr-1">
+                  {report.transcript.map((turn) => (
+                    <div
+                      key={turn.id}
+                      className="p-2.5 rounded-xl bg-[#0A0F1D] border border-white/[0.05] text-xs leading-relaxed"
+                    >
+                      <span
+                        className={`font-semibold mr-1.5 ${
+                          turn.speaker === "santa"
+                            ? "text-[#D4AF37]"
+                            : "text-[#F9F6F0]/70"
+                        }`}
+                      >
+                        {turn.speaker === "santa" ? "산타할아버지:" : `${childDisplayName}:`}
+                      </span>
+                      <span className="text-[#F9F6F0]/90">{turn.text}</span>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              )}
             </div>
-          </section>
-        )}
-
-        {/* 5. 북극 직통 통화권 패키지 안내 배너 (BM 프로토타입) */}
-        <section className="p-3.5 rounded-2xl bg-gradient-to-r from-indigo-950/80 via-slate-900 to-purple-950/80 border border-indigo-400/30 flex items-center justify-between gap-3">
-          <div className="space-y-0.5">
-            <div className="text-xs font-extrabold text-amber-300 flex items-center gap-1">
-              <Ticket className="w-3.5 h-3.5" />
-              산타의 약속 10분 통화권 패키지
-            </div>
-            <p className="text-[11px] text-slate-300 leading-snug">
-              3분씩 3번 나눠 부르는 다회차 통화권 (칭찬 · 습관점검 · 이브 통화)
-            </p>
-          </div>
-          <span className="px-2.5 py-1.5 rounded-xl bg-amber-400/20 border border-amber-400/40 text-amber-300 font-extrabold text-xs shrink-0">
-            9,900원
-          </span>
+          )}
         </section>
-      </div>
+      </main>
 
-      {/* 하단 액션 버튼 */}
-      <footer className="px-5 pt-2.5 pb-5 grid grid-cols-2 gap-2.5 border-t border-white/10 bg-slate-950/80">
+      {/* 하단 액션: 다시 전화하기 메인 버튼 & 홈 이동 */}
+      <footer className="relative z-10 flex flex-col items-center gap-3 pt-2">
         <button
           type="button"
-          onClick={() => router.push("/setup")}
-          className="py-3 px-4 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs flex items-center justify-center gap-1.5 transition"
+          onClick={() => router.push("/call")}
+          className="w-full h-15 py-4 rounded-full bg-[#9E1B20] hover:bg-[#B22026] active:scale-[0.98] text-[#F9F6F0] font-semibold text-base tracking-tight shadow-[0_14px_35px_rgba(158,27,32,0.45)] border border-white/15 flex items-center justify-center gap-2.5 transition-all duration-200"
         >
-          <RotateCcw className="w-4 h-4" />
-          <span>노트 다시 작성</span>
+          <Phone className="w-4 h-4 fill-current" />
+          <span>산타에게 다시 전화하기</span>
         </button>
 
         <button
           type="button"
-          onClick={() => router.push("/call")}
-          className="py-3 px-4 rounded-2xl bg-gradient-to-r from-red-600 to-amber-500 hover:from-red-500 hover:to-amber-400 text-white font-bold text-xs shadow-lg shadow-red-950/50 flex items-center justify-center gap-1.5 transition"
+          onClick={() => router.push("/")}
+          className="py-1.5 text-xs font-medium text-[#F9F6F0]/50 hover:text-[#F9F6F0]/85 transition"
         >
-          <PhoneCall className="w-4 h-4" />
-          <span>다시 통화하기</span>
+          처음 화면으로 돌아가기
         </button>
       </footer>
     </div>

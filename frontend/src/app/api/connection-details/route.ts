@@ -1,3 +1,4 @@
+// LiveKit Room 접속용 AccessToken 및 산타 메타데이터(SecretSantaNote) 발급 API 라우트
 import { NextRequest, NextResponse } from "next/server";
 import { AccessToken } from "livekit-server-sdk";
 import { ConnectionDetailsResponse, SecretSantaNote } from "@/types/santa";
@@ -7,11 +8,11 @@ export async function POST(req: NextRequest) {
     const body = (await req.json()) as Partial<SecretSantaNote>;
 
     const metadata: SecretSantaNote = {
-      childName: (body.childName || "지우").trim(),
+      childName: (body.childName || "우리 아이").trim(),
       childAge: (body.childAge || "6").trim(),
-      praise: (body.praise || "올해도 부모님 말씀을 잘 듣고 친구들과 사이좋게 지낸 일").trim(),
-      mission: (body.mission || "밤 9시 전에 양치질 깨끗이 하고 일찍 잠들기").trim(),
-      giftHint: (body.giftHint || "레고 소방차 세트").trim(),
+      praise: (body.praise || "올해도 건강하고 밝게 자라며 친구들과 사이좋게 지낸 일").trim(),
+      mission: (body.mission || "밤에 일찍 잠자리에 들고 스스로 깨끗이 양치질하기").trim(),
+      giftHint: (body.giftHint || "크리스마스 깜짝 선물").trim(),
       avatarProvider: body.avatarProvider || "anam",
     };
 

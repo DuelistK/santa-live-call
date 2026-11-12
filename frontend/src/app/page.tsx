@@ -1,166 +1,288 @@
 "use client";
-// 북극 산타 마을 실시간 영상통화 서비스 인트로 및 시작 화면
+// 앱 실행 후 3초 안에 산타와 즉시 통화를 시작할 수 있는 메인 화면 및 간결한 바텀시트 설정 컴포넌트
 
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import {
-  Sparkles,
-  PhoneCall,
-  Gift,
-  ShieldCheck,
-  HeartHandshake,
-  Video,
-  Award,
-  ChevronRight,
-  Star,
-} from "lucide-react";
+import { Phone, SlidersHorizontal, X, Check, ChevronRight } from "lucide-react";
+import { useSantaSession } from "@/context/SantaSessionContext";
+import { SecretSantaNote } from "@/types/santa";
+
+const QUICK_PRAISES = [
+  { label: "친구와 사이좋게 지냄", value: "친구들과 사이좋게 지내고 양보도 잘한 일" },
+  { label: "골고루 밥 잘 먹음", value: "편식하지 않고 반찬을 골고루 맛있게 먹은 일" },
+  { label: "스스로 정리정돈", value: "가방과 장난감을 스스로 제자리에 잘 정리한 일" },
+  { label: "씩씩한 등원·등교", value: "아침마다 울지 않고 씩씩하게 인사하며 등원한 일" },
+];
+
+const QUICK_MISSIONS = [
+  { label: "일찍 잠자리 들기", value: "밤 9시 전에 스스로 잠자리에 들기" },
+  { label: "깨끗이 양치하기", value: "밥 먹고 잠들기 전에 스스로 깨끗이 양치질하기" },
+  { label: "장난감 제자리 정리", value: "놀고 난 장난감은 스스로 정리하기" },
+  { label: "약속한 시간만 영상 보기", value: "유튜브와 영상은 부모님과 약속한 시간만 보기" },
+];
 
 export default function HomePage() {
   const router = useRouter();
+  const { note, setNote } = useSantaSession();
+
+  const [isSheetOpen, setIsSheetOpen] = useState(false);
+  const [draft, setDraft] = useState<SecretSantaNote>(note);
+
+  useEffect(() => {
+    setDraft(note);
+  }, [note]);
+
+  const hasCustomName = Boolean(note.childName && note.childName !== "우리 아이");
+
+  const handleImmediateCall = () => {
+    router.push("/call");
+  };
+
+  const handleOpenSheet = () => {
+    setDraft(note);
+    setIsSheetOpen(true);
+  };
+
+  const handleSaveAndClose = (startCallAfterSave: boolean) => {
+    const cleaned: SecretSantaNote = {
+      ...draft,
+      childName: draft.childName.trim(),
+      childAge: draft.childAge.trim() || "6",
+      praise: draft.praise.trim() || "올해도 건강하고 밝게 자라며 친구들과 사이좋게 지낸 일",
+      mission: draft.mission.trim() || "밤에 일찍 잠자리에 들고 스스로 깨끗이 양치질하기",
+      giftHint: draft.giftHint.trim() || "크리스마스 깜짝 선물",
+      avatarProvider: draft.avatarProvider || "anam",
+    };
+    setNote(cleaned);
+    setIsSheetOpen(false);
+    if (startCallAfterSave) {
+      router.push("/call");
+    }
+  };
 
   return (
-    <div className="relative flex-1 flex flex-col justify-between bg-gradient-to-b from-[#162247] via-[#0E172E] to-[#080C18] text-slate-100 overflow-y-auto select-none">
-      {/* 밤하늘 오로라 & 눈송이 장식 효과 */}
-      <div className="pointer-events-none absolute inset-0 overflow-hidden">
-        <div className="absolute -top-20 left-1/2 -translate-x-1/2 w-96 h-60 rounded-full bg-emerald-500/15 blur-3xl animate-pulse" />
-        <div className="absolute top-28 -right-16 w-64 h-64 rounded-full bg-red-600/20 blur-3xl" />
-        <div className="absolute bottom-32 -left-16 w-64 h-64 rounded-full bg-amber-400/10 blur-3xl" />
-      </div>
+    <div className="relative flex-1 flex flex-col justify-between bg-[#0A0F1D] text-[#F9F6F0] px-7 pt-7 pb-10 select-none overflow-hidden">
+      {/* 은은한 상단 배경 조명 (절제된 웜 레드 포인트) */}
+      <div className="pointer-events-none absolute -top-32 left-1/2 -translate-x-1/2 w-80 h-80 rounded-full bg-[#9E1B20]/18 blur-[95px]" />
 
-      {/* 상단 상태 바 */}
-      <header className="relative z-10 px-5 pt-6 pb-2 flex items-center justify-between">
-        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/15 border border-emerald-400/30 text-emerald-300 text-[11px] font-semibold">
-          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-          북극 산타 작업실 실시간 연결 가능
-        </div>
-        <span className="text-[11px] text-amber-300/90 font-semibold flex items-center gap-1">
-          <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
-          크리스마스 에디션
-        </span>
-      </header>
-
-      {/* 메인 히어로 영역 */}
-      <section className="relative z-10 px-6 pt-3 pb-4 text-center flex flex-col items-center">
-        <div className="relative my-2 flex items-center justify-center">
-          <div className="absolute w-36 h-36 rounded-full bg-gradient-to-tr from-red-600/40 via-amber-400/30 to-emerald-400/30 blur-xl animate-pulse" />
-          <div className="relative w-28 h-28 rounded-[32px] bg-gradient-to-b from-red-600 via-red-700 to-red-900 border-2 border-amber-300/80 shadow-[0_12px_40px_rgba(220,38,38,0.45)] flex flex-col items-center justify-center">
-            <span className="text-6xl animate-float" role="img" aria-label="Santa">
-              🎅
-            </span>
-            <span className="mt-1 px-2 py-0.5 rounded-full bg-black/50 text-[9px] font-bold text-amber-300 border border-amber-400/30">
-              AI LIVE AVATAR
-            </span>
-          </div>
-        </div>
-
-        <h1 className="mt-3 text-2xl font-extrabold tracking-tight text-white leading-snug">
-          올겨울, 우리 아이에게
-          <br />
-          <span className="bg-gradient-to-r from-amber-300 via-yellow-200 to-amber-400 bg-clip-text text-transparent">
-            진짜 산타할아버지
-          </span>
-          의 전화가 옵니다
-        </h1>
-
-        <p className="mt-2 text-xs text-slate-300 leading-relaxed max-w-[320px]">
-          부모님이 몰래 적어준 <strong className="text-white">비밀 산타 노트</strong>를 보고,
-          산타할아버지가 아이 이름을 부르며 실시간 영상으로 대화해요!
-        </p>
-      </section>
-
-      {/* 3단계 핵심 기능 카드 */}
-      <section className="relative z-10 px-5 space-y-2.5">
-        <div className="p-3.5 rounded-2xl bg-slate-900/80 border border-white/10 backdrop-blur-md flex items-start gap-3">
-          <div className="w-10 h-10 rounded-xl bg-rose-500/20 border border-rose-400/30 flex items-center justify-center shrink-0 text-rose-300">
-            <HeartHandshake className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="flex items-center gap-1.5">
-              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300">
-                STEP 1 · 부모님 몰래 설정
-              </span>
-              <h2 className="text-xs font-bold text-white">맞춤 칭찬 & 생활습관 약속</h2>
-            </div>
-            <p className="text-[11px] text-slate-300 mt-1 leading-relaxed">
-              &ldquo;브로콜리도 다 먹었구나!&rdquo;, &ldquo;오늘부터 9시 전에 양치하고 자기로 약속!&rdquo;
-            </p>
-          </div>
-        </div>
-
-        <div className="p-3.5 rounded-2xl bg-slate-900/80 border border-white/10 backdrop-blur-md flex items-start gap-3">
-          <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-400/30 flex items-center justify-center shrink-0 text-amber-300">
-            <Video className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="flex items-center gap-1.5">
-              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300">
-                STEP 2 · 아이와 영상통화
-              </span>
-              <h2 className="text-xs font-bold text-white">실시간 AI 산타 아바타 & 동심 수호</h2>
-            </div>
-            <p className="text-[11px] text-slate-300 mt-1 leading-relaxed">
-              녹화 영상이 아니에요! 아이의 질문을 듣고 눈을 맞추며 실시간으로 대답해요.
-            </p>
-          </div>
-        </div>
-
-        <div className="p-3.5 rounded-2xl bg-slate-900/80 border border-white/10 backdrop-blur-md flex items-start gap-3">
-          <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-400/30 flex items-center justify-center shrink-0 text-emerald-300">
-            <Gift className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="flex items-center gap-1.5">
-              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300">
-                STEP 3 · 통화 종료 후
-              </span>
-              <h2 className="text-xs font-bold text-white">산타의 비밀 선물 리포트 & 상장</h2>
-            </div>
-            <p className="text-[11px] text-slate-300 mt-1 leading-relaxed">
-              대화 중 아이가 말한 &lsquo;진짜 받고 싶은 선물&rsquo;을 추출해 부모님께 알려드려요.
-            </p>
-          </div>
-        </div>
-      </section>
-
-      {/* 하단 통화권 배너 & 시작 CTA 버튼 */}
-      <footer className="relative z-10 px-5 pt-4 pb-6 space-y-2.5">
-        <div className="px-3.5 py-2.5 rounded-xl bg-gradient-to-r from-amber-500/15 via-red-500/15 to-emerald-500/15 border border-amber-400/30 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-amber-300 shrink-0" />
-            <span className="text-[11px] text-slate-200">
-              현재 <strong className="text-amber-300">북극 직통 무료 체험권</strong>이 활성화되어 있습니다
-            </span>
-          </div>
-          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-400 text-slate-950 shrink-0">
-            FREE
+      {/* 상단 바: 북극 연결 상태 & 미니멀 맞춤 설정 버튼 */}
+      <header className="relative z-10 flex items-center justify-between">
+        <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/[0.04] border border-white/[0.08]">
+          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+          <span className="text-xs font-medium text-[#F9F6F0]/80 tracking-tight">
+            북극 산타 마을 연결 가능
           </span>
         </div>
 
         <button
           type="button"
-          onClick={() => router.push("/setup")}
-          className="w-full py-4 px-5 rounded-2xl bg-gradient-to-r from-red-600 via-red-500 to-amber-500 hover:from-red-500 hover:to-amber-400 text-white font-extrabold text-sm shadow-xl shadow-red-950/70 border border-white/20 flex items-center justify-center gap-2 transition transform active:scale-[0.99]"
+          onClick={handleOpenSheet}
+          aria-label="아이 정보 맞춤 설정"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/[0.04] hover:bg-white/[0.09] border border-white/[0.08] text-xs font-medium text-[#F9F6F0]/75 transition active:scale-95"
         >
-          <PhoneCall className="w-4 h-4 animate-bounce" />
-          <span>부모님 전용 · 비밀 산타 노트 작성하기</span>
-          <ChevronRight className="w-4 h-4" />
+          <SlidersHorizontal className="w-3.5 h-3.5 text-[#D4AF37]" />
+          <span>{hasCustomName ? `${note.childName} 맞춤` : "맞춤 설정"}</span>
+        </button>
+      </header>
+
+      {/* 중앙 영역: 전화를 기다리는 산타 캐릭터와 간결한 타이포그래피 */}
+      <section className="relative z-10 flex flex-col items-center text-center my-auto py-6">
+        <div className="relative flex items-center justify-center mb-8">
+          {/* 절제된 골드 파동 링 */}
+          <div className="absolute w-52 h-52 rounded-full border border-[#D4AF37]/15 animate-pulse-slow" />
+          <div className="absolute w-44 h-44 rounded-full border border-[#D4AF37]/25" />
+
+          <div className="relative w-36 h-36 rounded-full bg-[#111827] border-2 border-[#D4AF37]/65 shadow-[0_24px_60px_rgba(0,0,0,0.65)] flex items-center justify-center">
+            <span className="text-7xl select-none" role="img" aria-label="산타할아버지">
+              🎅
+            </span>
+            {/* 실시간 대기 중 표시 */}
+            <span className="absolute bottom-1.5 right-2.5 w-4 h-4 rounded-full bg-emerald-400 ring-4 ring-[#0A0F1D]" />
+          </div>
+        </div>
+
+        <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[#D4AF37] mb-2.5">
+          North Pole Direct Call
+        </p>
+
+        <h1 className="text-[28px] font-bold tracking-tight text-[#F9F6F0] leading-[1.3]">
+          산타할아버지가
+          <br />
+          전화를 기다리고 있어요
+        </h1>
+
+        <p className="mt-3 text-sm text-[#F9F6F0]/55 font-normal">
+          {hasCustomName ? (
+            <>
+              <button
+                type="button"
+                onClick={handleOpenSheet}
+                className="text-[#F9F6F0]/90 font-medium underline decoration-[#D4AF37]/60 underline-offset-4 hover:text-white"
+              >
+                {note.childName} 어린이
+              </button>
+              와 통화할 준비가 되었어요
+            </>
+          ) : (
+            "별도 설정 없이 바로 산타와 대화할 수 있어요"
+          )}
+        </p>
+      </section>
+
+      {/* 하단 영역: 가장 눈에 띄는 '산타와 통화하기' 메인 버튼 */}
+      <footer className="relative z-10 flex flex-col items-center gap-3.5">
+        <button
+          type="button"
+          onClick={handleImmediateCall}
+          className="w-full h-16 rounded-full bg-[#9E1B20] hover:bg-[#B22026] active:scale-[0.98] text-[#F9F6F0] font-semibold text-lg tracking-tight shadow-[0_14px_35px_rgba(158,27,32,0.45)] border border-white/15 flex items-center justify-center gap-3 transition-all duration-200"
+        >
+          <span className="w-9 h-9 rounded-full bg-white/15 flex items-center justify-center">
+            <Phone className="w-4 h-4 fill-current" />
+          </span>
+          <span>산타와 통화하기</span>
         </button>
 
-        <div className="flex items-center justify-between pt-1 px-1">
-          <span className="inline-flex items-center gap-1 text-[11px] text-slate-400">
-            <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-            아이 동심 보호 가드레일 적용됨
-          </span>
+        <div className="flex items-center justify-between w-full px-2 pt-0.5 text-xs text-[#F9F6F0]/45">
+          <button
+            type="button"
+            onClick={handleOpenSheet}
+            className="hover:text-[#F9F6F0]/80 transition"
+          >
+            아이 이름·칭찬 설정 (선택)
+          </button>
           <button
             type="button"
             onClick={() => router.push("/report")}
-            className="inline-flex items-center gap-1 text-[11px] text-amber-300/90 hover:text-amber-200 underline underline-offset-4"
+            className="inline-flex items-center gap-0.5 hover:text-[#F9F6F0]/80 transition"
           >
-            <Award className="w-3.5 h-3.5" />
-            샘플 산타 리포트 보기
+            <span>통화 기록</span>
+            <ChevronRight className="w-3.5 h-3.5" />
           </button>
         </div>
       </footer>
+
+      {/* ============================================================
+          바텀시트 (선택 사항): 아이 이름 & 원터치 칭찬/약속 칩
+      ============================================================ */}
+      {isSheetOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 backdrop-blur-sm transition-opacity"
+          onClick={() => setIsSheetOpen(false)}
+        >
+          <div
+            className="w-full max-w-[420px] rounded-t-[32px] bg-[#111827] border-t border-white/10 p-6 pb-8 space-y-5 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="w-10 h-1 rounded-full bg-white/15 mx-auto -mt-1 mb-1" />
+
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-base font-bold text-[#F9F6F0]">
+                  맞춤 통화 설정 (선택)
+                </h2>
+                <p className="text-xs text-[#F9F6F0]/55 mt-0.5">
+                  비워두면 산타가 통화 중에 자연스럽게 이름을 물어봐요
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsSheetOpen(false)}
+                aria-label="닫기"
+                className="w-8 h-8 rounded-full bg-white/[0.06] hover:bg-white/[0.12] flex items-center justify-center text-[#F9F6F0]/70"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* 1. 아이 이름 (선택 입력) */}
+            <div>
+              <label className="block text-xs font-medium text-[#F9F6F0]/70 mb-1.5">
+                아이 이름
+              </label>
+              <input
+                type="text"
+                value={draft.childName === "우리 아이" ? "" : draft.childName}
+                onChange={(e) => setDraft({ ...draft, childName: e.target.value })}
+                placeholder="입력하지 않아도 바로 통화 가능해요 (예: 지우)"
+                className="w-full h-11 px-3.5 rounded-xl bg-[#0A0F1D] border border-white/10 text-sm text-[#F9F6F0] placeholder-[#F9F6F0]/30 focus:outline-none focus:border-[#D4AF37]"
+              />
+            </div>
+
+            {/* 2. 칭찬 주제 (선택형 칩) */}
+            <div>
+              <label className="block text-xs font-medium text-[#F9F6F0]/70 mb-1.5">
+                산타가 칭찬해 줄 일
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                {QUICK_PRAISES.map((item) => {
+                  const selected = draft.praise === item.value;
+                  return (
+                    <button
+                      key={item.label}
+                      type="button"
+                      onClick={() => setDraft({ ...draft, praise: item.value })}
+                      className={`px-3 py-2.5 rounded-xl border text-left text-xs font-medium flex items-center justify-between transition ${
+                        selected
+                          ? "bg-[#D4AF37]/15 border-[#D4AF37] text-[#F9F6F0]"
+                          : "bg-[#0A0F1D]/70 border-white/[0.07] text-[#F9F6F0]/65 hover:border-white/20"
+                      }`}
+                    >
+                      <span className="truncate">{item.label}</span>
+                      {selected && <Check className="w-3.5 h-3.5 text-[#D4AF37] shrink-0" />}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* 3. 약속할 습관 (선택형 칩) */}
+            <div>
+              <label className="block text-xs font-medium text-[#F9F6F0]/70 mb-1.5">
+                산타와 약속할 습관
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                {QUICK_MISSIONS.map((item) => {
+                  const selected = draft.mission === item.value;
+                  return (
+                    <button
+                      key={item.label}
+                      type="button"
+                      onClick={() => setDraft({ ...draft, mission: item.value })}
+                      className={`px-3 py-2.5 rounded-xl border text-left text-xs font-medium flex items-center justify-between transition ${
+                        selected
+                          ? "bg-[#D4AF37]/15 border-[#D4AF37] text-[#F9F6F0]"
+                          : "bg-[#0A0F1D]/70 border-white/[0.07] text-[#F9F6F0]/65 hover:border-white/20"
+                      }`}
+                    >
+                      <span className="truncate">{item.label}</span>
+                      {selected && <Check className="w-3.5 h-3.5 text-[#D4AF37] shrink-0" />}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* 시트 하단 액션 버튼 */}
+            <div className="grid grid-cols-2 gap-2.5 pt-1">
+              <button
+                type="button"
+                onClick={() => handleSaveAndClose(false)}
+                className="h-12 rounded-full bg-white/[0.07] hover:bg-white/[0.12] text-xs font-semibold text-[#F9F6F0] transition"
+              >
+                저장만 하기
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSaveAndClose(true)}
+                className="h-12 rounded-full bg-[#9E1B20] hover:bg-[#B22026] text-xs font-semibold text-[#F9F6F0] flex items-center justify-center gap-1.5 shadow-lg transition"
+              >
+                <Phone className="w-3.5 h-3.5 fill-current" />
+                <span>저장 후 바로 통화</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

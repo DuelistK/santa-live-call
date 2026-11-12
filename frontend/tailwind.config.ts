@@ -10,11 +10,13 @@ const config: Config = {
     extend: {
       colors: {
         santa: {
-          red: "#D42426",
-          crimson: "#9E1B1D",
-          gold: "#F5C542",
+          red: "#B91C1C",
+          crimson: "#7F1D1D",
+          gold: "#D4AF37",
+          ivory: "#F9F6F0",
           pine: "#165B33",
-          night: "#0B132B",
+          night: "#0A0F1D",
+          navy: "#111827",
           snow: "#F8FAFC",
         },
       },
