@@ -437,6 +437,22 @@ async def entrypoint(ctx: JobContext) -> None:
         if is_final and transcript:
             asyncio.create_task(extract_gift_keywords_in_background(transcript, santa_agent))
 
+    # 프론트엔드 채팅창('글쓰고 말하기')에서 보낸 텍스트 메시지('child-chat' 토픽)를 받아 산타가 실제로 음성/영상 대답하도록 연동
+    @ctx.room.on("data_received")
+    def _on_data_received(data_packet: rtc.DataPacket) -> None:
+        try:
+            if data_packet.topic == "child-chat":
+                text = data_packet.data.decode("utf-8").strip()
+                if text:
+                    logger.info("Received child-chat message from frontend: %s", text)
+                    asyncio.create_task(extract_gift_keywords_in_background(text, santa_agent))
+                    session.generate_reply(
+                        user_input=text,
+                        instructions="아이가 방금 한 말에 대해 산타할아버지로서 1~2문장으로 다정하게 대답하세요.",
+                    )
+        except Exception as exc:
+            logger.warning("Failed to handle child-chat data packet: %s", exc)
+
     # 3. 실시간 아바타 세션 시작 (Anam 기본 / LemonSlice / HeyGen 스위칭)
     avatar = AvatarFactory.create_avatar_session(override_provider=note.avatarProvider)
     if avatar is not None:

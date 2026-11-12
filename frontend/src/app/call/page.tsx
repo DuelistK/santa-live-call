@@ -140,11 +140,13 @@ function ChildFrontCameraPip({ videoEnabled }: { videoEnabled: boolean }) {
 function LiveKitActiveStage({
   onAvatarReady,
   onRemoteReport,
+  onProvideChatSender,
   micEnabled,
   camEnabled,
 }: {
   onAvatarReady: (hasVideo: boolean) => void;
   onRemoteReport: (payload: Record<string, unknown>) => void;
+  onProvideChatSender: (sender: ((text: string) => void) | null) => void;
   micEnabled: boolean;
   camEnabled: boolean;
 }) {
@@ -161,6 +163,21 @@ function LiveKitActiveStage({
   useEffect(() => {
     localParticipant.setCameraEnabled(camEnabled).catch(() => {});
   }, [localParticipant, camEnabled]);
+
+  useEffect(() => {
+    const sendFn = (text: string) => {
+      try {
+        const bytes = new TextEncoder().encode(text);
+        localParticipant
+          .publishData(bytes, { reliable: true, topic: "child-chat" })
+          .catch(() => {});
+      } catch {
+        // ignore
+      }
+    };
+    onProvideChatSender(sendFn);
+    return () => onProvideChatSender(null);
+  }, [localParticipant, onProvideChatSender]);
 
   const remoteAvatarTrack = tracks.find(
     (t) =>
@@ -211,6 +228,14 @@ export default function CallPage() {
     note.giftHint ? [note.giftHint] : ["레고 시티 소방차 세트"]
   );
   const [transcript, setTranscript] = useState<ChatTurn[]>([]);
+  const livekitChatSenderRef = useRef<((text: string) => void) | null>(null);
+
+  const handleProvideChatSender = useCallback(
+    (sender: ((text: string) => void) | null) => {
+      livekitChatSenderRef.current = sender;
+    },
+    []
+  );
 
   // 벨소리는 발신 대기(dialing) 상태일 때만 재생
   useNorthPoleRingtone(callPhase === "dialing", ringMuted);
@@ -283,6 +308,11 @@ export default function CallPage() {
   const handleSendChildUtterance = (textToSend?: string) => {
     const text = (textToSend ?? childInputText).trim();
     if (!text) return;
+
+    // LiveKit DataChannel을 통해 백엔드 산타 에이전트에게도 실제 텍스트 발화 전달 (산타 음성/아바타 대답 트리거)
+    if (livekitChatSenderRef.current) {
+      livekitChatSenderRef.current(text);
+    }
 
     const nowStamp = formatTime(elapsedSec);
     const childTurn: ChatTurn = {
@@ -360,6 +390,7 @@ export default function CallPage() {
           <LiveKitActiveStage
             onAvatarReady={setHasRemoteAvatarVideo}
             onRemoteReport={handleRemoteReport}
+            onProvideChatSender={handleProvideChatSender}
             micEnabled={micEnabled}
             camEnabled={camEnabled}
           />
@@ -575,20 +606,30 @@ export default function CallPage() {
             type="button"
             onClick={() => setMicEnabled((v) => !v)}
             aria-label="마이크 토글"
-            className={`w-12 h-12 rounded-full flex items-center justify-center border transition ${
+            className={`px-3.5 h-12 rounded-full flex items-center justify-center gap-1.5 border text-xs font-bold transition ${
               micEnabled
-                ? "bg-white/15 border-white/25 text-white hover:bg-white/25"
+                ? "bg-emerald-500/25 border-emerald-400 text-emerald-200 hover:bg-emerald-500/35"
                 : "bg-rose-600/80 border-rose-400 text-white"
             }`}
           >
-            {micEnabled ? <Mic className="w-5 h-5" /> : <MicOff className="w-5 h-5" />}
+            {micEnabled ? (
+              <>
+                <Mic className="w-4 h-4 text-emerald-300" />
+                <span>마이크 켜짐</span>
+              </>
+            ) : (
+              <>
+                <MicOff className="w-4 h-4" />
+                <span>음소거됨</span>
+              </>
+            )}
           </button>
 
           <button
             type="button"
             onClick={handleEndCall}
             aria-label="통화 종료 및 리포트 보기"
-            className="px-6 h-14 rounded-full bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white font-bold text-sm shadow-xl shadow-red-950/80 border border-red-400/50 flex items-center gap-2 transition transform active:scale-95"
+            className="px-5 h-14 rounded-full bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white font-bold text-sm shadow-xl shadow-red-950/80 border border-red-400/50 flex items-center gap-2 transition transform active:scale-95"
           >
             <PhoneOff className="w-5 h-5" />
             <span>통화 종료</span>
@@ -598,13 +639,23 @@ export default function CallPage() {
             type="button"
             onClick={() => setCamEnabled((v) => !v)}
             aria-label="카메라 토글"
-            className={`w-12 h-12 rounded-full flex items-center justify-center border transition ${
+            className={`px-3.5 h-12 rounded-full flex items-center justify-center gap-1.5 border text-xs font-bold transition ${
               camEnabled
-                ? "bg-white/15 border-white/25 text-white hover:bg-white/25"
+                ? "bg-emerald-500/25 border-emerald-400 text-emerald-200 hover:bg-emerald-500/35"
                 : "bg-rose-600/80 border-rose-400 text-white"
             }`}
           >
-            {camEnabled ? <Video className="w-5 h-5" /> : <VideoOff className="w-5 h-5" />}
+            {camEnabled ? (
+              <>
+                <Video className="w-4 h-4 text-emerald-300" />
+                <span>카메라 켜짐</span>
+              </>
+            ) : (
+              <>
+                <VideoOff className="w-4 h-4" />
+                <span>카메라 꺼짐</span>
+              </>
+            )}
           </button>
         </div>
       </div>
