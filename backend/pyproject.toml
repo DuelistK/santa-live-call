@@ -1,0 +1,22 @@
+[project]
+name = "santa-live-call-backend"
+version = "0.1.0"
+description = "Real-time AI Santa Claus video call agent powered by LiveKit Agents 1.x"
+readme = "../AGENTS.md"
+requires-python = ">=3.11"
+dependencies = [
+    "livekit-agents>=1.0.0",
+    "livekit-plugins-deepgram>=1.0.0",
+    "livekit-plugins-google>=1.0.0",
+    "livekit-plugins-elevenlabs>=1.0.0",
+    "livekit-plugins-silero>=1.0.0",
+    "livekit-plugins-anam>=1.0.0",
+    "livekit-plugins-lemonslice>=1.0.0",
+    "livekit-plugins-liveavatar>=1.0.0",
+    "python-dotenv>=1.0.1",
+    "pydantic>=2.7.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
