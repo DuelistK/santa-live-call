@@ -338,6 +338,7 @@ async def extract_gift_keywords_in_background(
     try:
         from google import genai  # type: ignore
 
+        gemini_model = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite").strip()
         client = genai.Client(api_key=google_api_key)
         prompt = (
             "다음은 어린이가 산타할아버지와 영상통화하며 한 말입니다. "
@@ -347,7 +348,7 @@ async def extract_gift_keywords_in_background(
         )
         response = await asyncio.to_thread(
             client.models.generate_content,
-            model="gemini-2.5-flash",
+            model=gemini_model,
             contents=prompt,
         )
         extracted = (response.text or "").strip()
@@ -395,9 +396,10 @@ async def entrypoint(ctx: JobContext) -> None:
         api_key=os.getenv("DEEPGRAM_API_KEY"),
     )
 
-    # - LLM: Google Gemini 2.5 Flash (초저지연 대화 응답)
+    # - LLM: Google Gemini Flash (신규 API 키에서 즉시 응답하는 gemini-3.5-flash-lite 기본 사용)
+    gemini_model = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite").strip()
     llm_engine = google.LLM(
-        model="gemini-2.5-flash",
+        model=gemini_model,
         temperature=0.7,
         api_key=os.getenv("GOOGLE_API_KEY"),
     )

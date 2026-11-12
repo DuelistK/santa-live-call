@@ -148,7 +148,10 @@ function LiveKitActiveStage({
   micEnabled: boolean;
   camEnabled: boolean;
 }) {
-  const tracks = useTracks([Track.Source.Camera]);
+  const tracks = useTracks(
+    [Track.Source.Camera, Track.Source.ScreenShare, Track.Source.Unknown],
+    { onlySubscribed: false }
+  );
   const { localParticipant } = useLocalParticipant();
 
   useEffect(() => {
@@ -160,7 +163,9 @@ function LiveKitActiveStage({
   }, [localParticipant, camEnabled]);
 
   const remoteAvatarTrack = tracks.find(
-    (t) => !t.participant.isLocal && t.source === Track.Source.Camera
+    (t) =>
+      !t.participant.isLocal &&
+      t.publication?.kind === Track.Kind.Video
   );
 
   useEffect(() => {
@@ -349,7 +354,7 @@ export default function CallPage() {
           connect={true}
           audio={micEnabled}
           video={camEnabled}
-          className="absolute inset-0 z-0"
+          className="absolute inset-0 z-10 pointer-events-none"
         >
           <RoomAudioRenderer />
           <LiveKitActiveStage
@@ -365,8 +370,8 @@ export default function CallPage() {
           레이어 1: 실시간 AI 산타 영상 스트림 (Cross-fade In)
       ============================================================ */}
       <div
-        className={`absolute inset-0 transition-opacity duration-1000 ease-in-out ${
-          callPhase === "connected" ? "opacity-100 z-10" : "opacity-0 z-0 pointer-events-none"
+        className={`absolute inset-0 transition-opacity duration-1000 ease-in-out pointer-events-none ${
+          callPhase === "connected" ? "opacity-100 z-10" : "opacity-0 z-0"
         }`}
       >
         {/* 원격 LiveKit 아바타 비디오가 없을 때 보여줄 인터랙티브 산타 아바타 캔버스 */}
