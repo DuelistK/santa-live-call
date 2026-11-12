@@ -21,13 +21,42 @@ from typing import Any, Optional
 
 from dotenv import load_dotenv
 
-# Windows / 사내 네트워크 환경에서 OS 루트 인증서 저장소를 사용하도록 truststore 활성화
-try:
-    import truststore  # type: ignore
+# Windows / 사내 네트워크 환경에서 Python 및 Rust(livekit-rtc) 엔진 모두 OS 루트 인증서를 신뢰하도록 설정
+def _configure_windows_ca_bundle() -> None:
+    try:
+        import base64
+        import ssl
+        import certifi
 
-    truststore.inject_into_ssl()
-except Exception:
-    pass
+        bundle_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "combined_cacert.pem")
+        if not os.path.exists(bundle_path):
+            pem_certs: list[str] = []
+            for store_name in ("ROOT", "CA"):
+                for cert, encoding, _ in ssl.enum_certificates(store_name):
+                    if encoding == "x509_asn":
+                        b64 = base64.encodebytes(cert).decode("ascii")
+                        pem_certs.append(
+                            f"-----BEGIN CERTIFICATE-----\n{b64}-----END CERTIFICATE-----\n"
+                        )
+            with open(certifi.where(), "r", encoding="utf-8") as f:
+                base_pem = f.read()
+            with open(bundle_path, "w", encoding="utf-8") as f:
+                f.write(base_pem + "\n" + "\n".join(pem_certs))
+
+        os.environ["SSL_CERT_FILE"] = bundle_path
+        os.environ["REQUESTS_CA_BUNDLE"] = bundle_path
+    except Exception:
+        pass
+
+    try:
+        import truststore  # type: ignore
+
+        truststore.inject_into_ssl()
+    except Exception:
+        pass
+
+
+_configure_windows_ca_bundle()
 
 from livekit import rtc
 from livekit.agents import (
