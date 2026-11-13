@@ -1,5 +1,5 @@
 "use client";
-// 통화 종료 후 산타와의 대화 요약, 선물 키워드 및 다시 전화하기 기능을 제공하는 화면
+// 통화 종료 후 하이라이트 녹화 영상 재생·저장, 대화 요약 및 다시 전화하기 기능을 제공하는 화면
 
 import React, { useState } from "react";
 import { useRouter } from "next/navigation";
@@ -12,13 +12,17 @@ import {
   ChevronUp,
   ExternalLink,
   ArrowLeft,
+  Download,
+  Share2,
+  Film,
 } from "lucide-react";
 import { useSantaSession } from "@/context/SantaSessionContext";
 
 export default function ReportPage() {
   const router = useRouter();
-  const { note, report } = useSantaSession();
+  const { note, report, recordedVideoUrl, recordedVideoExt } = useSantaSession();
   const [showTranscript, setShowTranscript] = useState(false);
+  const [shareToast, setShareToast] = useState<string | null>(null);
 
   const childDisplayName =
     report.childName && report.childName !== "우리 아이"
@@ -45,6 +49,39 @@ export default function ReportPage() {
   const durationLabel =
     minutes > 0 ? `${minutes}분 ${seconds}초 통화` : `${seconds}초 통화`;
 
+  const downloadFilename = `santa-call-${childDisplayName}-${new Date()
+    .toISOString()
+    .slice(0, 10)}.${recordedVideoExt || "webm"}`;
+
+  const handleShareVideo = async () => {
+    if (!recordedVideoUrl) return;
+    try {
+      const response = await fetch(recordedVideoUrl);
+      const blob = await response.blob();
+      const file = new File([blob], downloadFilename, {
+        type: blob.type || "video/webm",
+      });
+
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({
+          title: `${childDisplayName}와(과) 산타할아버지의 영상통화`,
+          text: `북극 산타할아버지와 ${childDisplayName}의 특별한 크리스마스 통화 기록입니다.`,
+          files: [file],
+        });
+        return;
+      }
+    } catch {
+      // 모바일 파일 공유 미지원 또는 취소 시 다운로드로 대체
+    }
+
+    const a = document.createElement("a");
+    a.href = recordedVideoUrl;
+    a.download = downloadFilename;
+    a.click();
+    setShareToast("영상 파일 다운로드를 시작했습니다.");
+    setTimeout(() => setShareToast(null), 3000);
+  };
+
   return (
     <div className="relative flex-1 flex flex-col justify-between bg-[#0A0F1D] text-[#F9F6F0] px-7 pt-7 pb-9 overflow-y-auto select-none">
       {/* 은은한 상단 배경 조명 */}
@@ -68,10 +105,10 @@ export default function ReportPage() {
       </header>
 
       {/* 본문 콘텐츠 */}
-      <main className="relative z-10 my-auto py-6 space-y-6">
+      <main className="relative z-10 my-auto py-5 space-y-5">
         {/* 타이틀 & 산타 코멘트 */}
-        <section className="text-center space-y-2">
-          <div className="mx-auto w-16 h-16 rounded-full bg-[#111827] border border-[#D4AF37]/60 flex items-center justify-center text-3xl shadow-lg mb-3">
+        <section className="text-center space-y-1.5">
+          <div className="mx-auto w-14 h-14 rounded-full bg-[#111827] border border-[#D4AF37]/60 flex items-center justify-center text-3xl shadow-lg mb-2">
             🎅
           </div>
           <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[#D4AF37]">
@@ -80,10 +117,57 @@ export default function ReportPage() {
           <h1 className="text-2xl font-bold tracking-tight text-[#F9F6F0]">
             산타할아버지와의 통화 완료
           </h1>
-          <p className="text-xs text-[#F9F6F0]/65 leading-relaxed max-w-[300px] mx-auto pt-1">
+          <p className="text-xs text-[#F9F6F0]/65 leading-relaxed max-w-[300px] mx-auto pt-0.5">
             {report.santaComment}
           </p>
         </section>
+
+        {/* 통화 하이라이트 녹화 영상 카드 (녹화된 영상이 있을 때 표시) */}
+        {recordedVideoUrl && (
+          <section className="rounded-3xl bg-[#111827] border border-[#D4AF37]/40 p-4 space-y-3 shadow-xl">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-[#F9F6F0] flex items-center gap-1.5">
+                <Film className="w-4 h-4 text-[#D4AF37]" />
+                <span>통화 하이라이트 영상 (산타 + {childDisplayName})</span>
+              </span>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#D4AF37]/15 text-[#D4AF37] font-medium">
+                자동 녹화됨
+              </span>
+            </div>
+
+            <div className="relative w-full aspect-[9/16] max-h-64 rounded-2xl overflow-hidden bg-[#0A0F1D] border border-white/10 flex items-center justify-center">
+              <video
+                src={recordedVideoUrl}
+                controls
+                playsInline
+                className="w-full h-full object-contain"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <a
+                href={recordedVideoUrl}
+                download={downloadFilename}
+                className="h-10 rounded-xl bg-[#D4AF37] hover:bg-[#e2be46] text-[#0A0F1D] font-semibold text-xs flex items-center justify-center gap-1.5 transition active:scale-95"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>영상 저장하기</span>
+              </a>
+              <button
+                type="button"
+                onClick={handleShareVideo}
+                className="h-10 rounded-xl bg-white/[0.08] hover:bg-white/[0.14] border border-white/10 text-[#F9F6F0] font-semibold text-xs flex items-center justify-center gap-1.5 transition active:scale-95"
+              >
+                <Share2 className="w-3.5 h-3.5 text-[#D4AF37]" />
+                <span>공유하기</span>
+              </button>
+            </div>
+
+            {shareToast && (
+              <p className="text-[11px] text-center text-[#D4AF37]">{shareToast}</p>
+            )}
+          </section>
+        )}
 
         {/* 정제된 단일 요약 카드 */}
         <section className="rounded-3xl bg-[#111827] border border-white/[0.08] p-5 space-y-4 shadow-xl">

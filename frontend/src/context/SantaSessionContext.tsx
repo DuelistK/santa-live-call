@@ -1,11 +1,13 @@
 "use client";
-// 산타 통화 설정값(SecretSantaNote) 및 통화 후 리포트(SantaReportData) 전역 상태 컨텍스트
+// 다자녀 프로필, 산타 수첩, 칭찬 도장판, 통화 히스토리 및 하이라이트 녹화 영상을 관리하는 전역 컨텍스트
 
 import React, { createContext, useContext, useEffect, useState } from "react";
-import { SantaReportData, SecretSantaNote } from "@/types/santa";
+import { ChildProfile, SantaReportData, SecretSantaNote } from "@/types/santa";
 
-const STORAGE_NOTE_KEY = "santa_mvp_secret_note_v2";
+const STORAGE_PROFILES_KEY = "santa_mvp_profiles_v3";
+const STORAGE_ACTIVE_PROFILE_KEY = "santa_mvp_active_profile_v3";
 const STORAGE_REPORT_KEY = "santa_mvp_report_v2";
+const SESSION_PARENT_UNLOCK_KEY = "santa_parent_unlocked_v1";
 
 export const DEFAULT_SANTA_NOTE: SecretSantaNote = {
   childName: "",
@@ -17,6 +19,8 @@ export const DEFAULT_SANTA_NOTE: SecretSantaNote = {
 };
 
 export const DEFAULT_SANTA_REPORT: SantaReportData = {
+  id: "report-default",
+  createdAt: new Date().toISOString(),
   childName: "우리 아이",
   callDurationSec: 65,
   detectedGifts: ["크리스마스 깜짝 선물"],
@@ -48,43 +52,170 @@ export const DEFAULT_SANTA_REPORT: SantaReportData = {
   ],
 };
 
+const INITIAL_PROFILE: ChildProfile = {
+  id: "child-1",
+  note: DEFAULT_SANTA_NOTE,
+  habitStamps: [],
+  reports: [],
+};
+
 interface SantaSessionContextValue {
   note: SecretSantaNote;
   setNote: (next: SecretSantaNote) => void;
   report: SantaReportData;
   setReport: React.Dispatch<React.SetStateAction<SantaReportData>>;
+  profiles: ChildProfile[];
+  activeProfileId: string;
+  switchProfile: (profileId: string) => void;
+  addChildProfile: () => void;
+  removeChildProfile: (profileId: string) => void;
+  habitStamps: string[];
+  toggleHabitStamp: (slotId: string) => void;
+  resetHabitStamps: () => void;
+  callHistory: SantaReportData[];
+  appendReportToHistory: (newReport: SantaReportData) => void;
+  parentUnlocked: boolean;
+  unlockParentGate: () => void;
+  lockParentGate: () => void;
+  recordedVideoUrl: string | null;
+  recordedVideoExt: string;
+  setRecordedVideo: (url: string | null, ext?: string) => void;
 }
 
 const SantaSessionContext = createContext<SantaSessionContextValue | undefined>(undefined);
 
 export function SantaSessionProvider({ children }: { children: React.ReactNode }) {
-  const [note, setNoteState] = useState<SecretSantaNote>(DEFAULT_SANTA_NOTE);
+  const [profiles, setProfiles] = useState<ChildProfile[]>([INITIAL_PROFILE]);
+  const [activeProfileId, setActiveProfileId] = useState<string>(INITIAL_PROFILE.id);
   const [report, setReportState] = useState<SantaReportData>(DEFAULT_SANTA_REPORT);
+  const [parentUnlocked, setParentUnlocked] = useState<boolean>(false);
+  const [recordedVideoUrl, setRecordedVideoUrl] = useState<string | null>(null);
+  const [recordedVideoExt, setRecordedVideoExt] = useState<string>("webm");
 
   useEffect(() => {
     try {
-      const savedNote = window.localStorage.getItem(STORAGE_NOTE_KEY);
-      if (savedNote) {
-        const parsed = JSON.parse(savedNote) as SecretSantaNote;
-        setNoteState({ ...DEFAULT_SANTA_NOTE, ...parsed });
+      const savedProfiles = window.localStorage.getItem(STORAGE_PROFILES_KEY);
+      if (savedProfiles) {
+        const parsed = JSON.parse(savedProfiles) as ChildProfile[];
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setProfiles(parsed);
+        }
+      }
+      const savedActiveId = window.localStorage.getItem(STORAGE_ACTIVE_PROFILE_KEY);
+      if (savedActiveId) {
+        setActiveProfileId(savedActiveId);
       }
       const savedReport = window.localStorage.getItem(STORAGE_REPORT_KEY);
       if (savedReport) {
         const parsedReport = JSON.parse(savedReport) as SantaReportData;
         setReportState(parsedReport);
       }
+      const unlocked = window.sessionStorage.getItem(SESSION_PARENT_UNLOCK_KEY) === "1";
+      setParentUnlocked(unlocked);
     } catch {
-      // ignore localStorage read errors
+      // ignore storage errors
     }
   }, []);
 
-  const setNote = (next: SecretSantaNote) => {
-    setNoteState(next);
+  const persistProfiles = (nextProfiles: ChildProfile[], nextActiveId?: string) => {
+    setProfiles(nextProfiles);
     try {
-      window.localStorage.setItem(STORAGE_NOTE_KEY, JSON.stringify(next));
+      window.localStorage.setItem(STORAGE_PROFILES_KEY, JSON.stringify(nextProfiles));
+      if (nextActiveId) {
+        window.localStorage.setItem(STORAGE_ACTIVE_PROFILE_KEY, nextActiveId);
+      }
     } catch {
       // ignore
     }
+  };
+
+  const activeProfile =
+    profiles.find((p) => p.id === activeProfileId) || profiles[0] || INITIAL_PROFILE;
+
+  const lastReport =
+    activeProfile.reports.length > 0
+      ? activeProfile.reports[activeProfile.reports.length - 1]
+      : null;
+
+  const enrichedNote: SecretSantaNote = {
+    ...activeProfile.note,
+    previousMemory: {
+      callCount: activeProfile.reports.length,
+      lastCallDate: lastReport?.createdAt || "",
+      lastGifts: lastReport?.detectedGifts || [],
+      lastPromise: lastReport?.missionPromise || activeProfile.note.mission,
+      stampsCollected: activeProfile.habitStamps.length,
+    },
+  };
+
+  const setNote = (next: SecretSantaNote) => {
+    const updated = profiles.map((p) =>
+      p.id === activeProfile.id ? { ...p, note: next } : p
+    );
+    persistProfiles(updated);
+  };
+
+  const switchProfile = (profileId: string) => {
+    setActiveProfileId(profileId);
+    try {
+      window.localStorage.setItem(STORAGE_ACTIVE_PROFILE_KEY, profileId);
+    } catch {
+      // ignore
+    }
+  };
+
+  const addChildProfile = () => {
+    const newId = `child-${Date.now()}`;
+    const newProf: ChildProfile = {
+      id: newId,
+      note: { ...DEFAULT_SANTA_NOTE },
+      habitStamps: [],
+      reports: [],
+    };
+    const nextList = [...profiles, newProf];
+    setActiveProfileId(newId);
+    persistProfiles(nextList, newId);
+  };
+
+  const removeChildProfile = (profileId: string) => {
+    if (profiles.length <= 1) return;
+    const filtered = profiles.filter((p) => p.id !== profileId);
+    const nextActive = filtered[0].id;
+    setActiveProfileId(nextActive);
+    persistProfiles(filtered, nextActive);
+  };
+
+  const toggleHabitStamp = (slotId: string) => {
+    const updated = profiles.map((p) => {
+      if (p.id !== activeProfile.id) return p;
+      const exists = p.habitStamps.includes(slotId);
+      const nextStamps = exists
+        ? p.habitStamps.filter((id) => id !== slotId)
+        : [...p.habitStamps, slotId];
+      return { ...p, habitStamps: nextStamps };
+    });
+    persistProfiles(updated);
+  };
+
+  const resetHabitStamps = () => {
+    const updated = profiles.map((p) =>
+      p.id === activeProfile.id ? { ...p, habitStamps: [] } : p
+    );
+    persistProfiles(updated);
+  };
+
+  const appendReportToHistory = (newReport: SantaReportData) => {
+    const stampedReport: SantaReportData = {
+      ...newReport,
+      id: newReport.id || `rep-${Date.now()}`,
+      createdAt: newReport.createdAt || new Date().toISOString(),
+    };
+    const updated = profiles.map((p) =>
+      p.id === activeProfile.id
+        ? { ...p, reports: [...p.reports.slice(-9), stampedReport] }
+        : p
+    );
+    persistProfiles(updated);
   };
 
   const setReport: React.Dispatch<React.SetStateAction<SantaReportData>> = (updater) => {
@@ -99,8 +230,63 @@ export function SantaSessionProvider({ children }: { children: React.ReactNode }
     });
   };
 
+  const unlockParentGate = () => {
+    setParentUnlocked(true);
+    try {
+      window.sessionStorage.setItem(SESSION_PARENT_UNLOCK_KEY, "1");
+    } catch {
+      // ignore
+    }
+  };
+
+  const lockParentGate = () => {
+    setParentUnlocked(false);
+    try {
+      window.sessionStorage.removeItem(SESSION_PARENT_UNLOCK_KEY);
+    } catch {
+      // ignore
+    }
+  };
+
+  const setRecordedVideo = (url: string | null, ext = "webm") => {
+    setRecordedVideoUrl((prevUrl) => {
+      if (prevUrl && prevUrl !== url) {
+        try {
+          URL.revokeObjectURL(prevUrl);
+        } catch {
+          // ignore
+        }
+      }
+      return url;
+    });
+    setRecordedVideoExt(ext);
+  };
+
   return (
-    <SantaSessionContext.Provider value={{ note, setNote, report, setReport }}>
+    <SantaSessionContext.Provider
+      value={{
+        note: enrichedNote,
+        setNote,
+        report,
+        setReport,
+        profiles,
+        activeProfileId: activeProfile.id,
+        switchProfile,
+        addChildProfile,
+        removeChildProfile,
+        habitStamps: activeProfile.habitStamps,
+        toggleHabitStamp,
+        resetHabitStamps,
+        callHistory: activeProfile.reports,
+        appendReportToHistory,
+        parentUnlocked,
+        unlockParentGate,
+        lockParentGate,
+        recordedVideoUrl,
+        recordedVideoExt,
+        setRecordedVideo,
+      }}
+    >
       {children}
     </SantaSessionContext.Provider>
   );

@@ -1,5 +1,5 @@
 "use client";
-// 레거시 /setup 경로 접근 시 간소화된 메인 홈 화면(/)으로 즉시 이동시키는 리다이렉트 페이지
+// /setup 경로로 직접 진입 시 메인 홈 화면의 '부모님 비밀 산타 수첩' 시트를 즉시 열어주는 리다이렉트 페이지
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
@@ -8,8 +8,8 @@ export default function SetupRedirectPage() {
   const router = useRouter();
 
   useEffect(() => {
-    router.replace("/");
+    router.replace("/?setup=1");
   }, [router]);
 
-  return <div className="flex-1 bg-[#0A0F1D]" />;
+  return <div className="flex-1 bg-[#080E1E]" />;
 }

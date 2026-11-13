@@ -95,6 +95,10 @@ class SecretSantaNote:
     mission: str = "밤에 일찍 자고 양치질을 깨끗이 하기"
     giftHint: str = "특별한 크리스마스 선물"
     avatarProvider: str = ""
+    previousCallCount: int = 0
+    lastPromise: str = ""
+    lastGifts: str = ""
+    stampsCollected: int = 0
 
     @classmethod
     def from_raw(cls, raw_metadata: Optional[str], attributes: Optional[dict[str, str]] = None) -> "SecretSantaNote":
@@ -105,13 +109,42 @@ class SecretSantaNote:
                 parsed = json.loads(raw_metadata)
                 if isinstance(parsed, dict):
                     data.update(parsed)
+                    prev_mem = parsed.get("previousMemory")
+                    if isinstance(prev_mem, dict):
+                        data["previousCallCount"] = prev_mem.get("callCount", 0)
+                        data["lastPromise"] = prev_mem.get("lastPromise", "")
+                        last_gifts_list = prev_mem.get("lastGifts")
+                        if isinstance(last_gifts_list, list):
+                            data["lastGifts"] = ", ".join(str(g) for g in last_gifts_list)
+                        data["stampsCollected"] = prev_mem.get("stampsCollected", 0)
             except json.JSONDecodeError:
                 logger.warning("Failed to parse JSON metadata; falling back to attributes/defaults.")
 
         if attributes:
-            for key in ("childName", "childAge", "praise", "mission", "giftHint", "avatarProvider"):
+            for key in (
+                "childName",
+                "childAge",
+                "praise",
+                "mission",
+                "giftHint",
+                "avatarProvider",
+                "previousCallCount",
+                "lastPromise",
+                "lastGifts",
+                "stampsCollected",
+            ):
                 if attributes.get(key):
                     data[key] = attributes[key]
+
+        try:
+            prev_count = int(data.get("previousCallCount") or 0)
+        except (TypeError, ValueError):
+            prev_count = 0
+
+        try:
+            stamps_num = int(data.get("stampsCollected") or 0)
+        except (TypeError, ValueError):
+            stamps_num = 0
 
         return cls(
             childName=str(data.get("childName") or cls.childName).strip(),
@@ -120,6 +153,10 @@ class SecretSantaNote:
             mission=str(data.get("mission") or cls.mission).strip(),
             giftHint=str(data.get("giftHint") or cls.giftHint).strip(),
             avatarProvider=str(data.get("avatarProvider") or "").strip(),
+            previousCallCount=prev_count,
+            lastPromise=str(data.get("lastPromise") or "").strip(),
+            lastGifts=str(data.get("lastGifts") or "").strip(),
+            stampsCollected=stamps_num,
         )
 
 
@@ -136,6 +173,16 @@ class SantaReportPayload:
 # 2. 동적 산타 시스템 프롬프트 생성기 (동심 파괴 방지 & 가드레일 반영)
 # =====================================================================
 def build_santa_system_prompt(note: SecretSantaNote) -> str:
+    memory_section = ""
+    if note.previousCallCount > 0 or note.stampsCollected > 0:
+        memory_section = f"""
+[이전 통화 기억 및 칭찬 도장 현황 (에피소드 메모리)]
+- 누적 통화 횟수: 이전 {note.previousCallCount}회 통화함 (구면인 사이처럼 반갑게 아는 척해 주세요!)
+- 지난번 약속했던 습관: {note.lastPromise or note.mission}
+- 지난번 이야기했던 선물: {note.lastGifts or note.giftHint}
+- 현재 모은 칭찬 별 도장: {note.stampsCollected}/5개 {"(5개 모두 달성! 엄청나게 축하해 주세요!)" if note.stampsCollected >= 5 else ""}
+"""
+
     return f"""당신은 북극 산타 마을에 살고 있는 진짜 '산타할아버지'입니다.
 지금 영상 통화로 한국의 '{note.childName}'({note.childAge}세) 어린이와 실시간으로 만나고 있습니다.
 
@@ -144,7 +191,7 @@ def build_santa_system_prompt(note: SecretSantaNote) -> str:
 - 올해 특별히 칭찬해 줄 일: {note.praise}
 - 산타할아버지가 꼭 당부할 약속(습관): {note.mission}
 - 부모님이 귀띔해 준 선물 힌트: {note.giftHint}
-
+{memory_section}
 [핵심 대화 규칙 및 동심 보호 가드레일 — 절대 준수!]
 1. 말투와 페르소나:
    - 따뜻하고 인자하며 신비로운 할아버지 말투를 사용하세요.
@@ -301,7 +348,54 @@ class SantaClausAgent(Agent):
             )
 
         await self.publish_report_to_frontend()
+        await self.publish_magic_fx(
+            effect="gift" if cleaned_gift else "stamp",
+            message=f"북극 마법 수첩에 '{cleaned_gift or '착한 약속'}' 기록 완료! ✨",
+        )
         return f"Recorded gift wish '{cleaned_gift}' in Secret Santa Report."
+
+    @function_tool
+    async def trigger_santa_magic(
+        self,
+        context: RunContext,
+        effect_type: str,
+        message: str = "",
+    ) -> str:
+        """
+        통화 화면에 실시간 북극 마법 이펙트(눈꽃 파티클, 착한 어린이 도장, 루돌프 코 반짝임, 선물 상자)와 사운드를 실행합니다.
+
+        Args:
+            effect_type: 실행할 마법 종류 ('snow' | 'stamp' | 'rudolph' | 'gift')
+            message: 화면에 함께 표시할 짧은 마법 알림 문구
+        """
+        normalized = effect_type.strip().lower()
+        if normalized not in ("snow", "stamp", "rudolph", "gift"):
+            normalized = "snow"
+        await self.publish_magic_fx(effect=normalized, message=message.strip())
+        return f"Triggered Santa magic effect: {normalized}"
+
+    async def publish_magic_fx(self, effect: str, message: str = "") -> None:
+        """LiveKit DataChannel ('santa-magic-fx' 토픽)을 통해 프론트엔드에 실시간 마법 이펙트를 전송합니다."""
+        try:
+            default_labels = {
+                "snow": "북극 마을의 마법 눈꽃이 내려요! ❄️",
+                "stamp": "착한 어린이 약속 도장 쾅! ⭐",
+                "rudolph": "루돌프가 반짝이는 코로 인사해요! 🦌",
+                "gift": "마법 수첩에 소원 선물이 기록되었어요! 🎁",
+            }
+            payload = {
+                "effect": effect,
+                "message": message or default_labels.get(effect, "산타의 마법이 펼쳐집니다! ✨"),
+            }
+            payload_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            await self.room.local_participant.publish_data(
+                payload_bytes,
+                reliable=True,
+                topic="santa-magic-fx",
+            )
+            logger.info("Published santa-magic-fx to frontend: %s", effect)
+        except Exception as exc:
+            logger.warning("Could not publish santa-magic-fx packet: %s", exc)
 
     async def publish_report_to_frontend(self) -> None:
         """LiveKit DataChannel ('santa-report' 토픽)을 통해 프론트엔드에 리포트 JSON을 브로드캐스트합니다."""
@@ -391,13 +485,35 @@ async def entrypoint(ctx: JobContext) -> None:
     note = await wait_for_child_note(ctx)
 
     # 2. STT / LLM / TTS 파이프라인 구성
-    # - STT: Deepgram 한국어 최적화 설정
-    stt_engine = deepgram.STT(
-        model="nova-2",
-        language="ko",
-        smart_format=True,
-        api_key=os.getenv("DEEPGRAM_API_KEY"),
-    )
+    # - STT: Deepgram 한국어 최적화 설정 + 아이 이름/선물 고유명사 키워드 부스팅
+    boost_terms: list[tuple[str, float]] = [
+        ("산타할아버지", 3.0),
+        ("루돌프", 2.5),
+        ("티니핑", 3.0),
+        ("하츄핑", 3.0),
+        ("카봇", 3.0),
+        ("레고", 2.5),
+    ]
+    if note.childName and note.childName not in ("착한 어린이", "우리 아이"):
+        boost_terms.append((note.childName, 3.5))
+    if note.giftHint and note.giftHint != "크리스마스 깜짝 선물":
+        boost_terms.append((note.giftHint, 3.5))
+
+    try:
+        stt_engine = deepgram.STT(
+            model="nova-2",
+            language="ko",
+            smart_format=True,
+            keywords=boost_terms,
+            api_key=os.getenv("DEEPGRAM_API_KEY"),
+        )
+    except TypeError:
+        stt_engine = deepgram.STT(
+            model="nova-2",
+            language="ko",
+            smart_format=True,
+            api_key=os.getenv("DEEPGRAM_API_KEY"),
+        )
 
     # - LLM: Google Gemini Flash (신규 API 키에서 즉시 응답하는 gemini-3.5-flash-lite 기본 사용)
     gemini_model = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite").strip()
@@ -423,18 +539,27 @@ async def entrypoint(ctx: JobContext) -> None:
         language="ko",
     )
 
+    # 유아의 느린 말투와 추임새를 끊지 않도록 Silero VAD 침묵 허용 시간 완화
+    try:
+        vad_engine = silero.VAD.load(min_silence_duration=0.72, min_speech_duration=0.15)
+    except TypeError:
+        vad_engine = silero.VAD.load()
+
     session = AgentSession(
-        vad=silero.VAD.load(),
+        vad=vad_engine,
         stt=stt_engine,
         llm=llm_engine,
         tts=tts_engine,
     )
 
     santa_agent = SantaClausAgent(note=note, room=ctx.room)
+    last_child_activity = asyncio.get_event_loop().time()
+    nudge_sent = False
 
     # 사용자/산타 대화가 추가될 때마다 프론트엔드 실시간 자막 및 대화록('santa-transcript' 토픽)으로 즉시 전송
     @session.on("conversation_item_added")
     def _on_conversation_item_added(event: Any) -> None:
+        nonlocal last_child_activity
         try:
             item = getattr(event, "item", None)
             if not item:
@@ -452,6 +577,27 @@ async def entrypoint(ctx: JobContext) -> None:
                 return
 
             speaker = "santa" if role == "assistant" else "child"
+            if speaker == "child":
+                last_child_activity = asyncio.get_event_loop().time()
+            else:
+                # 산타의 대사 맥락에 맞춰 자동으로 마법 이펙트('santa-magic-fx') 트리거
+                if any(k in text_str for k in ("루돌프", "썰매", "방울")):
+                    asyncio.create_task(
+                        santa_agent.publish_magic_fx("rudolph", "루돌프가 반짝이는 코로 인사해요! 🦌")
+                    )
+                elif any(k in text_str for k in ("약속", "손가락", "기특", "도장", "잘했")):
+                    asyncio.create_task(
+                        santa_agent.publish_magic_fx("stamp", "착한 어린이 칭찬 도장 쾅! ⭐")
+                    )
+                elif any(k in text_str for k in ("선물", "수첩", "장난감")):
+                    asyncio.create_task(
+                        santa_agent.publish_magic_fx("gift", "북극 마법 수첩에 선물이 기록 중이에요! 🎁")
+                    )
+                elif any(k in text_str for k in ("북극", "눈", "호호호")):
+                    asyncio.create_task(
+                        santa_agent.publish_magic_fx("snow", "북극 마을의 마법 눈꽃이 내려요! ❄️")
+                    )
+
             packet = json.dumps({"speaker": speaker, "text": text_str}, ensure_ascii=False).encode("utf-8")
             asyncio.create_task(
                 ctx.room.local_participant.publish_data(
@@ -466,26 +612,44 @@ async def entrypoint(ctx: JobContext) -> None:
     # 사용자 발화 시 백그라운드 선물 키워드 추출 연결
     @session.on("user_input_transcribed")
     def _on_user_transcribed(event: Any) -> None:
+        nonlocal last_child_activity
         transcript = getattr(event, "transcript", "")
         is_final = getattr(event, "is_final", True)
+        if transcript:
+            last_child_activity = asyncio.get_event_loop().time()
         if is_final and transcript:
             asyncio.create_task(extract_gift_keywords_in_background(transcript, santa_agent))
 
-    # 프론트엔드 채팅창('글쓰고 말하기')에서 보낸 텍스트 메시지('child-chat' 토픽)를 받아 산타가 실제로 음성/영상 대답하도록 연동
+    # 프론트엔드 DataChannel 메시지('child-chat', 'parent-whisper', 'santa-vision-speak') 수신 연동
     @ctx.room.on("data_received")
     def _on_data_received(data_packet: rtc.DataPacket) -> None:
+        nonlocal last_child_activity
         try:
-            if data_packet.topic == "child-chat":
-                text = data_packet.data.decode("utf-8").strip()
-                if text:
-                    logger.info("Received child-chat message from frontend: %s", text)
-                    asyncio.create_task(extract_gift_keywords_in_background(text, santa_agent))
-                    session.generate_reply(
-                        user_input=text,
-                        instructions="아이가 방금 한 말에 대해 산타할아버지로서 1~2문장으로 다정하게 대답하세요.",
-                    )
+            topic = data_packet.topic
+            text = data_packet.data.decode("utf-8").strip()
+            if not text:
+                return
+
+            if topic == "child-chat":
+                last_child_activity = asyncio.get_event_loop().time()
+                logger.info("Received child-chat message from frontend: %s", text)
+                asyncio.create_task(extract_gift_keywords_in_background(text, santa_agent))
+                session.generate_reply(
+                    user_input=text,
+                    instructions="아이가 방금 한 말에 대해 산타할아버지로서 1~2문장으로 다정하게 대답하세요.",
+                )
+            elif topic == "parent-whisper":
+                logger.info("Received secret parent-whisper cue: %s", text)
+                session.generate_reply(
+                    instructions=f"부모님이 몰래 보낸 연출 지시입니다(아이에게는 비밀로 하세요): {text} — 산타할아버지답게 자연스럽게 1~2문장으로 말해주세요.",
+                )
+            elif topic == "santa-vision-speak":
+                logger.info("Received multimodal vision observation: %s", text)
+                session.generate_reply(
+                    instructions=f"방금 카메라로 아이의 모습을 보았습니다. 다음 내용을 자연스러운 산타할아버지 대사(1~2문장)로 아이에게 직접 말해주세요: {text}",
+                )
         except Exception as exc:
-            logger.warning("Failed to handle child-chat data packet: %s", exc)
+            logger.warning("Failed to handle data packet: %s", exc)
 
     # 3. AgentSession 먼저 시작 후 실시간 아바타 세션 연결
     await session.start(
@@ -504,7 +668,7 @@ async def entrypoint(ctx: JobContext) -> None:
     # 초기 리포트 상태 프론트엔드 동기화
     await santa_agent.publish_report_to_frontend()
 
-    # 5. 통화 연결 직후 산타가 먼저 반갑게 첫인사 (이름 미설정 시 통화 중 자연스럽게 이름 물어보기)
+    # 5. 통화 연결 직후 산타가 먼저 반갑게 첫인사 (칭찬 도장 5개 달성 / 재통화 기억 / 첫 통화 분기)
     is_generic_name = note.childName in ("착한 어린이", "우리 아이", "아이", "")
     if is_generic_name:
         opening_instructions = (
@@ -512,6 +676,19 @@ async def entrypoint(ctx: JobContext) -> None:
             "'호호호! 안녕! 북극 산타 마을에서 산타할아버지가 전화했단다!'라고 반갑게 인사한 뒤, "
             "'할아버지가 마법 수첩에서 찾으려는데, 우리 멋진 친구 이름이 무엇이니?'라고 "
             "1~2문장으로 다정하게 물어보세요. 이후 아이가 이름을 말하면 그 이름을 계속 불러주세요."
+        )
+    elif note.stampsCollected >= 5:
+        opening_instructions = (
+            f"방금 영상 통화가 연결되었습니다! "
+            f"'{note.childName}' 어린이가 약속 도장 5개를 모두 모았다는 소식이 북극에 도착했습니다! "
+            f"'호호호! 우리 {note.childName} 어린이! 약속 별 도장 다섯 개를 전부 모았다고 요정들이 알려줬단다! 정말 대단하구나!'라며 "
+            f"1~2문장으로 신나게 축하 인사를 건네세요."
+        )
+    elif note.previousCallCount >= 1:
+        opening_instructions = (
+            f"방금 '{note.childName}' 어린이와 다시 영상 통화가 연결되었습니다(이전 {note.previousCallCount}회 통화)! "
+            f"'호호호! 우리 {note.childName} 어린이, 또 만나서 반갑구나! 지난번에 할아버지랑 약속했던 {note.lastPromise or note.mission} 잘 지켰니?'라고 "
+            f"기억하고 있다는 듯이 1~2문장으로 다정하게 첫인사를 건네세요."
         )
     else:
         opening_instructions = (
@@ -522,6 +699,51 @@ async def entrypoint(ctx: JobContext) -> None:
         )
 
     await session.generate_reply(instructions=opening_instructions)
+    last_child_activity = asyncio.get_event_loop().time()
+
+    # 6. 침묵 넛지(16초 무응답 시 1회 긴장 완화) & 루돌프 썰매 점검 알림(150초 도달 시 비용 보호 자연 마무리)
+    async def _call_lifecycle_guardian() -> None:
+        nonlocal nudge_sent
+        call_started = asyncio.get_event_loop().time()
+        wrapup_sent = False
+        try:
+            while ctx.room.connection_state == rtc.ConnectionState.CONN_CONNECTED:
+                await asyncio.sleep(3.0)
+                now = asyncio.get_event_loop().time()
+
+                if not nudge_sent and (now - last_child_activity) >= 16.0 and (now - call_started) < 60.0:
+                    nudge_sent = True
+                    session.generate_reply(
+                        instructions=(
+                            f"아이가 부끄러워서 아직 말을 못 하고 있습니다. "
+                            f"'호호호, 산타할아버지 흰 수염이 신기해서 보고 있구나? 고개만 끄덕여도 할아버지는 다 보인단다!'라고 "
+                            f"1문장으로 다정하게 긴장을 풀어주세요."
+                        )
+                    )
+
+                if not wrapup_sent and (now - call_started) >= 150.0:
+                    wrapup_sent = True
+                    fx_packet = json.dumps(
+                        {"effect": "sleigh_bell", "message": "요정들이 루돌프 썰매 점검 종을 울렸어요 🔔"},
+                        ensure_ascii=False,
+                    ).encode("utf-8")
+                    await ctx.room.local_participant.publish_data(
+                        fx_packet, reliable=True, topic="santa-magic-fx"
+                    )
+                    session.generate_reply(
+                        instructions=(
+                            f"이제 통화를 따뜻하게 마무리할 시간입니다. "
+                            f"'앗, 요정 친구들이 루돌프 썰매 점검 시간이라고 종을 울리는구나! 우리 {note.childName}, 약속 꼭 지키고 크리스마스에 또 만나자! 메리 크리스마스!'라고 "
+                            f"다정하게 작별 인사를 건네세요."
+                        )
+                    )
+                    break
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            logger.debug("Lifecycle guardian stopped: %s", exc)
+
+    asyncio.create_task(_call_lifecycle_guardian())
 
 
 def _cleanup_stale_agent_workers() -> None:

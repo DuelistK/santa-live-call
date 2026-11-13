@@ -1,4 +1,4 @@
-// LiveKit Room 접속용 AccessToken 및 산타 메타데이터(SecretSantaNote) 발급 API 라우트
+// LiveKit Room 접속용 AccessToken 및 산타 메타데이터(SecretSantaNote + 에피소드 기억) 발급 API 라우트
 import { NextRequest, NextResponse } from "next/server";
 import { AccessToken } from "livekit-server-sdk";
 import { ConnectionDetailsResponse, SecretSantaNote } from "@/types/santa";
@@ -10,10 +10,13 @@ export async function POST(req: NextRequest) {
     const metadata: SecretSantaNote = {
       childName: (body.childName || "우리 아이").trim(),
       childAge: (body.childAge || "6").trim(),
-      praise: (body.praise || "올해도 건강하고 밝게 자라며 친구들과 사이좋게 지낸 일").trim(),
-      mission: (body.mission || "밤에 일찍 잠자리에 들고 스스로 깨끗이 양치질하기").trim(),
+      praise: (
+        body.praise || "친구들과 사이좋게 지내고 양보도 잘한 일"
+      ).trim(),
+      mission: (body.mission || "밤 9시 전에 스스로 잠자리에 들기").trim(),
       giftHint: (body.giftHint || "크리스마스 깜짝 선물").trim(),
       avatarProvider: body.avatarProvider || "anam",
+      previousMemory: body.previousMemory,
     };
 
     const livekitUrl =
@@ -30,7 +33,6 @@ export async function POST(req: NextRequest) {
     const participantName = metadata.childName || "child-user";
 
     if (!isConfigured) {
-      // 로컬/UI 검증 시 LiveKit Cloud 키가 없어도 전체 플로우를 시연할 수 있도록 demoMode 응답 반환
       const demoResponse: ConnectionDetailsResponse = {
         serverUrl: "wss://demo.livekit.cloud",
         roomName,
@@ -42,20 +44,34 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(demoResponse);
     }
 
+    const attributes: Record<string, string> = {
+      childName: metadata.childName,
+      childAge: metadata.childAge,
+      praise: metadata.praise,
+      mission: metadata.mission,
+      giftHint: metadata.giftHint,
+      avatarProvider: metadata.avatarProvider || "anam",
+    };
+
+    if (metadata.previousMemory) {
+      attributes.previousCallCount = String(
+        metadata.previousMemory.callCount || 0
+      );
+      attributes.lastPromise = metadata.previousMemory.lastPromise || "";
+      attributes.lastGifts = (metadata.previousMemory.lastGifts || []).join(
+        ", "
+      );
+      attributes.stampsCollected = String(
+        metadata.previousMemory.stampsCollected || 0
+      );
+    }
+
     const at = new AccessToken(apiKey, apiSecret, {
       identity: `child-${Date.now()}`,
       name: participantName,
       ttl: "15m",
-      // 백엔드 agent.py가 participant.metadata 및 attributes 양쪽에서 모두 읽을 수 있도록 주입
       metadata: JSON.stringify(metadata),
-      attributes: {
-        childName: metadata.childName,
-        childAge: metadata.childAge,
-        praise: metadata.praise,
-        mission: metadata.mission,
-        giftHint: metadata.giftHint,
-        avatarProvider: metadata.avatarProvider || "anam",
-      },
+      attributes,
     });
 
     at.addGrant({
