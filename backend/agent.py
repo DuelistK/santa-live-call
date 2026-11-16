@@ -22,6 +22,12 @@ from typing import Any, Optional
 
 from dotenv import load_dotenv
 
+# OpenTelemetry 백그라운드 SSL 재시도 스팸 및 GIL 경합으로 인한 오디오 지연 차단
+os.environ.setdefault("OTEL_SDK_DISABLED", "true")
+os.environ.setdefault("OTEL_TRACES_EXPORTER", "none")
+os.environ.setdefault("OTEL_METRICS_EXPORTER", "none")
+os.environ.setdefault("OTEL_LOGS_EXPORTER", "none")
+
 # Windows / 사내 네트워크 환경에서 Python 및 Rust(livekit-rtc) 엔진 모두 OS 루트 인증서를 신뢰하도록 설정
 def _configure_windows_ca_bundle() -> None:
     try:
@@ -31,10 +37,12 @@ def _configure_windows_ca_bundle() -> None:
 
         bundle_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "combined_cacert.pem")
         if not os.path.exists(bundle_path):
+            seen_certs: set[bytes] = set()
             pem_certs: list[str] = []
             for store_name in ("ROOT", "CA"):
                 for cert, encoding, _ in ssl.enum_certificates(store_name):
-                    if encoding == "x509_asn":
+                    if encoding == "x509_asn" and cert not in seen_certs:
+                        seen_certs.add(cert)
                         b64 = base64.encodebytes(cert).decode("ascii")
                         pem_certs.append(
                             f"-----BEGIN CERTIFICATE-----\n{b64}-----END CERTIFICATE-----\n"
@@ -48,11 +56,28 @@ def _configure_windows_ca_bundle() -> None:
         os.environ["REQUESTS_CA_BUNDLE"] = bundle_path
 
         # Python 3.14 OpenSSL VERIFY_X509_STRICT 플래그가 사내 루트 인증서의 Missing Authority Key Identifier를
-        # 거부하지 않도록 기본 SSLContext 생성 시 VERIFY_X509_STRICT 플래그를 해제합니다.
+        # 거부하지 않도록 기본 SSLContext 생성 시 VERIFY_X509_STRICT 플래그를 해제하고,
+        # 매번 디스크에서 대용량 PEM을 다시 파싱해 이벤트 루프가 블로킹되는 현상을 방지합니다.
         _orig_create_default_context = ssl.create_default_context
 
-        def _relaxed_create_default_context(*args: Any, **kwargs: Any) -> ssl.SSLContext:
-            ctx = _orig_create_default_context(*args, **kwargs)
+        def _relaxed_create_default_context(
+            purpose: Any = ssl.Purpose.SERVER_AUTH,
+            *,
+            cafile: Any = None,
+            capath: Any = None,
+            cadata: Any = None,
+        ) -> ssl.SSLContext:
+            if cafile is None and capath is None and cadata is None:
+                ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                ctx.check_hostname = True
+                ctx.verify_mode = ssl.CERT_REQUIRED
+                if hasattr(ssl, "VERIFY_X509_STRICT"):
+                    ctx.verify_flags &= ~ssl.VERIFY_X509_STRICT
+                ctx.load_default_certs(purpose)
+                return ctx
+            ctx = _orig_create_default_context(
+                purpose, cafile=cafile, capath=capath, cadata=cadata
+            )
             if hasattr(ssl, "VERIFY_X509_STRICT"):
                 ctx.verify_flags &= ~ssl.VERIFY_X509_STRICT
             return ctx
@@ -193,21 +218,21 @@ def build_santa_system_prompt(note: SecretSantaNote) -> str:
 - 부모님이 귀띔해 준 선물 힌트: {note.giftHint}
 {memory_section}
 [핵심 대화 규칙 및 동심 보호 가드레일 — 절대 준수!]
-1. 말투와 페르소나:
-   - 따뜻하고 인자하며 신비로운 할아버지 말투를 사용하세요.
-   - 대화 중간중간 "호호호!" 또는 "허허허, 반갑구나!" 같은 산타 특유의 웃음소리를 자연스럽게 섞어 주세요.
-   - 아이의 집중력을 위해 **한 번에 반드시 1~2문장 이내**로 짧고 다정하게 말하고, 아이가 대답할 차례를 넘겨주세요.
+1. 말투와 목소리 톤 유지 (가장 중요!):
+   - 중후하고 따뜻하며 인자한 할아버지 말투를 일정한 속도로 차분하게 유지하세요.
+   - 웃음소리는 "허허허," 또는 "호호호,"처럼 쉼표와 함께 자연스럽게 섞어 쓰되, 목소리 톤이 얇아지거나 여자/젊은이 목소리로 튀지 않도록 **물결표(~)나 과도한 느낌표(!!)를 절대 사용하지 마세요.**
+   - 문장 끝은 가급적 마침표(.)나 물음표(?)로 차분하게 마무리하고, **한 번에 반드시 1~2문장(최대 65자 이내)**으로 짧고 또렷하게 말한 뒤 아이의 대답을 기다리세요.
 2. 동적 정보 활용:
    - 북극의 '착한 어린이 마법 수첩'에서 봤다면서 '{note.praise}'에 대해 구체적으로 칭찬해 주세요.
    - 대화 중 자연스럽게 '{note.mission}' 약속을 잘 지킬 수 있는지 손가락 걸고 약속을 받아내세요.
    - 크리스마스에 무슨 선물을 받고 싶은지 물어보고, 아이가 망설이면 '{note.giftHint}' 관련 이야기를 은근슬쩍 꺼내며 반응을 살펴보세요.
 3. 동심 파괴 방지 (의심 대처):
-   - 아이가 "산타 진짜 있어요?", "가짜 아니에요?", "아빠/로봇 아니에요?"라고 의심해도 절대 AI이거나 가짜라고 인정하지 마세요!
-   - "호호호! 방금 루돌프 코가 반짝이는 바람에 북극 카메라가 살짝 흔들렸나 보구나! 지금 요정 친구들이 옆에서 선물 포장 리본을 묶고 있단다!"처럼 동화적이고 재치 있게 넘어가세요.
+   - 아이가 "산타 진짜 있어요?", "가짜 아니에요?", "아빠/로봇 아니에요?"라고 의심해도 절대 AI이거나 가짜라고 인정하지 마세요.
+   - "허허허, 방금 루돌프 코가 반짝이는 바람에 북극 카메라가 살짝 흔들렸나 보구나. 지금 요정 친구들이 옆에서 선물 리본을 묶고 있단다."처럼 동화적이고 재치 있게 넘어가세요.
 4. 침묵 및 돌발 상황 대처:
-   - 아이가 부끄러워하거나 말이 없으면 "호호호, 우리 {note.childName}이가 산타할아버지를 보니까 조금 부끄러운가 보구나! 할아버지 수염이 하얘서 신기하지?"라며 다정하게 긴장을 풀어주세요.
-5. 선물 키워드 기록 도구 호출:
-   - 아이가 받고 싶은 선물을 말하거나 약속을 다짐하면 `record_child_gift_wish` 도구를 호출해 부모님 비밀 리포트에 실시간으로 기록하세요.
+   - 아이가 부끄러워하거나 말이 없으면 "허허허, 우리 {note.childName}이가 산타할아버지를 보니까 조금 부끄러운가 보구나. 할아버지 수염이 하얘서 신기하지?"라며 다정하게 긴장을 풀어주세요.
+5. 초저지연 즉시 응답 규칙:
+   - 응답 지연을 막기 위해 통화 중에는 별도의 도구(function tool)를 호출하지 말고 **즉시 음성 대사 텍스트만 생성**하세요(선물 기록과 마법 연출은 백그라운드 시스템이 자동으로 처리합니다).
 """
 
 
@@ -393,19 +418,13 @@ class SantaClausAgent(Agent):
         )
         return f"Recorded gift wish '{cleaned_gift}' in Secret Santa Report."
 
-    @function_tool
     async def trigger_santa_magic(
         self,
-        context: RunContext,
         effect_type: str,
         message: str = "",
     ) -> str:
         """
         통화 화면에 실시간 북극 마법 이펙트(눈꽃 파티클, 착한 어린이 도장, 루돌프 코 반짝임, 선물 상자)와 사운드를 실행합니다.
-
-        Args:
-            effect_type: 실행할 마법 종류 ('snow' | 'stamp' | 'rudolph' | 'gift')
-            message: 화면에 함께 표시할 짧은 마법 알림 문구
         """
         normalized = effect_type.strip().lower()
         if normalized not in ("snow", "stamp", "rudolph", "gift"):
@@ -481,8 +500,9 @@ async def extract_gift_keywords_in_background(
 ) -> None:
     """
     아이의 발화 텍스트에서 선물 후보 키워드를 이벤트 루프 블로킹 없이 즉시 감지합니다.
-    (구체적인 선물 요약은 산타 에이전트의 record_child_gift_wish 함수 도구가 함께 처리합니다.)
     """
+    import re
+
     text = utterance.strip()
     if len(text) < 2:
         return
@@ -493,8 +513,28 @@ async def extract_gift_keywords_in_background(
             santa_agent.report.detectedGifts.append(kw)
             updated = True
 
+    # 정규식으로 '~ 받고 싶어요 / 갖고 싶어요 / 사주세요' 앞의 구문도 자동 추출
+    wish_match = re.search(
+        r"([가-힣a-zA-Z0-9\s]{2,18}?)\s*(?:받고\s*싶|갖고\s*싶|사\s*주|선물\s*받고)",
+        text,
+    )
+    if wish_match:
+        raw_phrase = wish_match.group(1).strip()
+        for prefix in ("산타할아버지", "할아버지", "저는요", "저는", "나는", "음", "그냥", "크리스마스에"):
+            if raw_phrase.startswith(prefix):
+                raw_phrase = raw_phrase[len(prefix) :].strip()
+        if raw_phrase.endswith(("을", "를", "이", "가")):
+            raw_phrase = raw_phrase[:-1].strip()
+        if 2 <= len(raw_phrase) <= 15 and raw_phrase not in santa_agent.report.detectedGifts:
+            santa_agent.report.detectedGifts.insert(0, raw_phrase)
+            updated = True
+
     if updated:
         await santa_agent.publish_report_to_frontend()
+        await santa_agent.publish_magic_fx(
+            effect="gift",
+            message=f"마법 수첩에 '{santa_agent.report.detectedGifts[0]}' 기록 🎁",
+        )
 
 
 # =====================================================================
@@ -562,8 +602,9 @@ async def entrypoint(ctx: JobContext) -> None:
         api_key=os.getenv("GOOGLE_API_KEY"),
     )
 
-    # - TTS: ElevenLabs 인자한 할아버지 목소리 & 다국어/한국어 초저지연 스트리밍 모델
-    # (livekit-plugins-elevenlabs는 기본적으로 ELEVEN_API_KEY를 찾으므로 ELEVENLABS_API_KEY를 명시 전달)
+    # - TTS: ElevenLabs 인자한 할아버지 목소리 고정 & 속도 급발진/성별 변화 방지 설정
+    # (stability/similarity_boost를 높이고 style=0.0, speed=0.92, auto_mode=True로 고정하여
+    #  젊은 남성이나 여성 목소리로 튀거나 문장 중간에 말이 급격히 빨라지는 현상을 원천 차단합니다.)
     eleven_api_key = os.getenv("ELEVENLABS_API_KEY") or os.getenv("ELEVEN_API_KEY")
     raw_voice_id = os.getenv("ELEVENLABS_VOICE_ID", "").strip()
     voice_id = (
@@ -574,13 +615,23 @@ async def entrypoint(ctx: JobContext) -> None:
     tts_engine = elevenlabs.TTS(
         api_key=eleven_api_key,
         voice_id=voice_id,
-        model="eleven_flash_v2_5",
+        model="eleven_turbo_v2_5",
         language="ko",
+        voice_settings=elevenlabs.VoiceSettings(
+            stability=0.85,
+            similarity_boost=0.88,
+            style=0.0,
+            speed=0.92,
+            use_speaker_boost=True,
+        ),
+        auto_mode=True,
+        streaming_latency=2,
+        apply_text_normalization="on",
     )
 
-    # 유아의 느린 말투와 추임새를 끊지 않도록 Silero VAD 침묵 허용 시간 완화
+    # 아이의 발화 후 응답 지연(기존 2.5~3.2초 대기)을 대폭 줄이기 위해 VAD 침묵 감지 및 엔드포인팅 지연 최적화
     try:
-        vad_engine = silero.VAD.load(min_silence_duration=0.72, min_speech_duration=0.15)
+        vad_engine = silero.VAD.load(min_silence_duration=0.40, min_speech_duration=0.15)
     except TypeError:
         vad_engine = silero.VAD.load()
 
@@ -589,16 +640,22 @@ async def entrypoint(ctx: JobContext) -> None:
         stt=stt_engine,
         llm=llm_engine,
         tts=tts_engine,
+        preemptive_generation=False,
+        min_endpointing_delay=0.25,
+        max_endpointing_delay=0.80,
+        min_interruption_duration=0.65,
+        min_interruption_words=2,
     )
 
     santa_agent = SantaClausAgent(note=note, room=ctx.room)
     last_child_activity = asyncio.get_event_loop().time()
+    last_magic_fx_time = 0.0
     nudge_sent = False
 
     # 사용자/산타 대화가 추가될 때마다 프론트엔드 실시간 자막 및 대화록('santa-transcript' 토픽)으로 즉시 전송
     @session.on("conversation_item_added")
     def _on_conversation_item_added(event: Any) -> None:
-        nonlocal last_child_activity
+        nonlocal last_child_activity, last_magic_fx_time
         try:
             item = getattr(event, "item", None)
             if not item:
@@ -616,26 +673,27 @@ async def entrypoint(ctx: JobContext) -> None:
                 return
 
             speaker = "santa" if role == "assistant" else "child"
+            now_ts = asyncio.get_event_loop().time()
             if speaker == "child":
-                last_child_activity = asyncio.get_event_loop().time()
+                last_child_activity = now_ts
             else:
-                # 산타의 대사 맥락에 맞춰 자동으로 마법 이펙트('santa-magic-fx') 트리거
-                if any(k in text_str for k in ("루돌프", "썰매", "방울")):
-                    asyncio.create_task(
-                        santa_agent.publish_magic_fx("rudolph", "루돌프가 반짝이는 코로 인사해요! 🦌")
-                    )
-                elif any(k in text_str for k in ("약속", "손가락", "기특", "도장", "잘했")):
-                    asyncio.create_task(
-                        santa_agent.publish_magic_fx("stamp", "착한 어린이 칭찬 도장 쾅! ⭐")
-                    )
-                elif any(k in text_str for k in ("선물", "수첩", "장난감")):
-                    asyncio.create_task(
-                        santa_agent.publish_magic_fx("gift", "북극 마법 수첩에 선물이 기록 중이에요! 🎁")
-                    )
-                elif any(k in text_str for k in ("북극", "눈", "호호호")):
-                    asyncio.create_task(
-                        santa_agent.publish_magic_fx("snow", "북극 마을의 마법 눈꽃이 내려요! ❄️")
-                    )
+                # 산타 대사 중 핵심 이벤트가 있을 때만(최소 10초 간격 쿨다운 적용) 좌측 상단 소형 알림 표시
+                if (now_ts - last_magic_fx_time) >= 10.0:
+                    if any(k in text_str for k in ("루돌프", "썰매")):
+                        last_magic_fx_time = now_ts
+                        asyncio.create_task(
+                            santa_agent.publish_magic_fx("rudolph", "루돌프가 반짝이는 코로 인사해요 🦌")
+                        )
+                    elif any(k in text_str for k in ("약속", "손가락", "도장")):
+                        last_magic_fx_time = now_ts
+                        asyncio.create_task(
+                            santa_agent.publish_magic_fx("stamp", "착한 어린이 약속 완료 ⭐")
+                        )
+                    elif any(k in text_str for k in ("수첩", "적어")):
+                        last_magic_fx_time = now_ts
+                        asyncio.create_task(
+                            santa_agent.publish_magic_fx("gift", "북극 마법 수첩 기록 중 🎁")
+                        )
 
             packet = json.dumps({"speaker": speaker, "text": text_str}, ensure_ascii=False).encode("utf-8")
             asyncio.create_task(

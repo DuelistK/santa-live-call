@@ -135,12 +135,12 @@ export default function ReportPage() {
               </span>
             </div>
 
-            <div className="relative w-full aspect-[9/16] max-h-64 rounded-2xl overflow-hidden bg-[#0A0F1D] border border-white/10 flex items-center justify-center">
+            <div className="relative mx-auto h-80 aspect-[9/16] rounded-2xl overflow-hidden bg-[#0A0F1D] border border-white/10 flex items-center justify-center shadow-inner">
               <video
                 src={recordedVideoUrl}
                 controls
                 playsInline
-                className="w-full h-full object-contain"
+                className="w-full h-full object-contain bg-[#0A0F1D]"
               />
             </div>
 

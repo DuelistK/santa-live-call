@@ -139,95 +139,69 @@ function playSantaMagicSound(effect: SantaMagicEffectType) {
   }
 }
 
-// 통화 화면 전체에 펼쳐지는 실시간 마법 이펙트 오버레이 컴포넌트
+// 통화 화면 좌측 상단에 작고 세련되게 표시되는 실시간 마법/미션 알림 배지 (산타 얼굴과 입 모양을 절대 가리지 않음)
 function SantaMagicStageOverlay({ magic }: { magic: SantaMagicEvent | null }) {
   if (!magic) return null;
 
-  const snowflakes = Array.from({ length: 16 });
+  const iconMap: Record<SantaMagicEffectType, string> = {
+    snow: "❄️",
+    stamp: "⭐",
+    rudolph: "🦌",
+    gift: "🎁",
+  };
+
+  const badgeTitleMap: Record<SantaMagicEffectType, string> = {
+    snow: "북극 마법 눈꽃",
+    stamp: "착한 어린이 약속",
+    rudolph: "루돌프 알림",
+    gift: "마법 수첩 기록",
+  };
 
   return (
-    <div className="pointer-events-none absolute inset-0 z-30 overflow-hidden flex flex-col items-center justify-center">
-      {/* 상단 마법 알림 토스트 배지 */}
-      <div className="absolute top-20 left-1/2 -translate-x-1/2 px-4 py-2 rounded-full bg-[#111827]/95 border border-[#D4AF37] shadow-[0_0_30px_rgba(212,175,55,0.45)] flex items-center gap-2 animate-bounce">
-        <Sparkles className="w-4 h-4 text-[#D4AF37] shrink-0" />
-        <span className="text-xs font-semibold text-[#F9F6F0] whitespace-nowrap">
-          {magic.label}
-        </span>
+    <div className="pointer-events-none absolute inset-0 z-30 overflow-hidden">
+      {/* 좌측 상단 컴팩트 알림 캡슐 — 산타 얼굴/입 중앙 영역을 전혀 침범하지 않음 */}
+      <div className="absolute top-28 left-6 max-w-[235px] px-3 py-2 rounded-2xl bg-[#111827]/90 backdrop-blur-md border border-[#D4AF37]/60 shadow-[0_8px_24px_rgba(0,0,0,0.45)] flex items-center gap-2.5 transition-all duration-300">
+        <div className="w-7 h-7 rounded-xl bg-[#D4AF37]/15 border border-[#D4AF37]/40 flex items-center justify-center text-sm shrink-0">
+          {iconMap[magic.effect] || "✨"}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1">
+            <Sparkles className="w-3 h-3 text-[#D4AF37] shrink-0" />
+            <span className="text-[10px] font-bold tracking-wider uppercase text-[#D4AF37] truncate">
+              {badgeTitleMap[magic.effect]}
+            </span>
+          </div>
+          <p className="text-[11px] font-medium text-[#F9F6F0] leading-snug line-clamp-2 mt-0.5">
+            {magic.label}
+          </p>
+        </div>
       </div>
 
-      {/* 1. 마법 눈꽃 파티클 연출 */}
+      {/* 눈꽃 효과일 때만 화면 가장자리 위주로 은은한 눈송이 표시 */}
       {magic.effect === "snow" && (
         <div className="absolute inset-0">
-          {snowflakes.map((_, i) => {
-            const left = `${(i * 19 + 7) % 92}%`;
-            const delay = `${(i % 5) * 180}ms`;
-            const size = i % 2 === 0 ? "text-2xl" : "text-lg";
-            return (
-              <span
-                key={i}
-                className={`absolute top-8 ${size} opacity-85 animate-ping`}
-                style={{
-                  left,
-                  top: `${12 + ((i * 13) % 68)}%`,
-                  animationDelay: delay,
-                  animationDuration: "1.8s",
-                }}
-              >
-                {i % 3 === 0 ? "❄️" : "✨"}
-              </span>
-            );
-          })}
-        </div>
-      )}
-
-      {/* 2. 착한 어린이 금빛 인증 도장 쾅! 연출 */}
-      {magic.effect === "stamp" && (
-        <div className="relative flex flex-col items-center justify-center">
-          <div className="absolute w-56 h-56 rounded-full bg-[#D4AF37]/20 animate-ping" />
-          <div className="relative w-44 h-44 rounded-full bg-[#111827]/95 border-4 border-[#D4AF37] shadow-[0_0_50px_rgba(212,175,55,0.65)] flex flex-col items-center justify-center p-4 text-center">
-            <Award className="w-10 h-10 text-[#D4AF37] mb-1" />
-            <span className="text-[10px] font-bold tracking-[0.2em] text-[#D4AF37] uppercase">
-              North Pole Official
+          {[8, 18, 82, 91, 12, 87].map((leftPct, i) => (
+            <span
+              key={i}
+              className="absolute text-sm opacity-65 animate-ping"
+              style={{
+                left: `${leftPct}%`,
+                top: `${14 + ((i * 15) % 60)}%`,
+                animationDelay: `${i * 220}ms`,
+                animationDuration: "2s",
+              }}
+            >
+              {i % 2 === 0 ? "❄️" : "✨"}
             </span>
-            <span className="text-base font-extrabold text-[#F9F6F0] mt-0.5">
-              착한 어린이 인증!
-            </span>
-            <span className="text-xs text-[#D4AF37] mt-1">⭐⭐⭐</span>
-          </div>
-        </div>
-      )}
-
-      {/* 3. 루돌프 반짝이는 코 연출 */}
-      {magic.effect === "rudolph" && (
-        <div className="relative flex flex-col items-center justify-center">
-          <div className="absolute w-52 h-52 rounded-full bg-[#9E1B20]/40 blur-xl animate-pulse" />
-          <div className="relative w-36 h-36 rounded-full bg-[#111827]/90 border-2 border-[#D4AF37] flex flex-col items-center justify-center shadow-2xl">
-            <span className="text-6xl">🦌</span>
-            <span className="mt-1 text-[11px] font-bold text-[#D4AF37]">
-              루돌프 코 반짝! 🔴
-            </span>
-          </div>
-        </div>
-      )}
-
-      {/* 4. 선물 수첩 마법 연출 */}
-      {magic.effect === "gift" && (
-        <div className="relative flex flex-col items-center justify-center">
-          <div className="absolute w-48 h-48 rounded-full bg-[#D4AF37]/20 animate-ping" />
-          <div className="relative w-36 h-36 rounded-full bg-[#111827]/90 border-2 border-[#D4AF37] flex flex-col items-center justify-center shadow-2xl">
-            <span className="text-6xl animate-bounce">🎁</span>
-            <span className="mt-1 text-[11px] font-bold text-[#F9F6F0]">
-              마법 수첩 기록 완료!
-            </span>
-          </div>
+          ))}
         </div>
       )}
     </div>
   );
 }
 
-// 우측 상단 전면 카메라 PIP (녹화 캔버스에서도 참조할 수 있도록 videoRef 전달)
-function ChildFrontCameraPip({
+// 우측 상단 전면 카메라 PIP (부모 리렌더링 시 카메라 스트림이 재시작되어 깜빡이는 현상 완벽 방지)
+const ChildFrontCameraPip = React.memo(function ChildFrontCameraPip({
   videoEnabled,
   childName,
   videoRef,
@@ -239,6 +213,11 @@ function ChildFrontCameraPip({
   onPermissionDenied: () => void;
 }) {
   const [hasCamera, setHasCamera] = useState(false);
+  const onDeniedRef = useRef(onPermissionDenied);
+
+  useEffect(() => {
+    onDeniedRef.current = onPermissionDenied;
+  }, [onPermissionDenied]);
 
   useEffect(() => {
     let activeStream: MediaStream | null = null;
@@ -270,20 +249,22 @@ function ChildFrontCameraPip({
         setHasCamera(true);
       })
       .catch(() => {
-        setHasCamera(false);
-        onPermissionDenied();
+        if (!cancelled) {
+          setHasCamera(false);
+          onDeniedRef.current();
+        }
       });
 
     return () => {
       cancelled = true;
       activeStream?.getTracks().forEach((t) => t.stop());
     };
-  }, [videoEnabled, videoRef, onPermissionDenied]);
+  }, [videoEnabled, videoRef]);
 
   if (!videoEnabled) return null;
 
   return (
-    <div className="relative w-24 h-32 rounded-2xl overflow-hidden border border-white/20 shadow-2xl bg-[#111827] shrink-0 transition-all duration-300">
+    <div className="relative w-24 h-32 rounded-2xl overflow-hidden border border-white/20 shadow-2xl bg-[#111827] shrink-0">
       <video
         ref={videoRef}
         autoPlay
@@ -310,7 +291,7 @@ function ChildFrontCameraPip({
       </div>
     </div>
   );
-}
+});
 
 // LiveKit Room 내부 실시간 아바타 비디오 트랙 & DataChannel 수신 컴포넌트
 function LiveKitActiveStage({
@@ -501,10 +482,16 @@ export default function CallPage() {
       }
       magicTimerRef.current = setTimeout(() => {
         setActiveMagic(null);
-      }, 3600);
+      }, 2400);
     },
     []
   );
+
+  const handleCamPermissionDenied = useCallback(() => {
+    setCamEnabled(false);
+    setCamPermissionWarning(true);
+    setTimeout(() => setCamPermissionWarning(false), 4000);
+  }, []);
 
   const handleProvideChatSender = useCallback(
     (sender: ((text: string) => void) | null) => {
@@ -661,6 +648,35 @@ export default function CallPage() {
 
     let frameCount = 0;
 
+    // 비디오/이미지가 찌그러지지 않도록(오이 현상 방지) CSS object-fit: cover 와 동일하게 중앙 크롭하여 그리는 헬퍼
+    const drawImageCover = (
+      source: CanvasImageSource,
+      srcW: number,
+      srcH: number,
+      dstX: number,
+      dstY: number,
+      dstW: number,
+      dstH: number
+    ) => {
+      if (srcW <= 0 || srcH <= 0) return;
+      const srcRatio = srcW / srcH;
+      const dstRatio = dstW / dstH;
+      let sx = 0;
+      let sy = 0;
+      let sw = srcW;
+      let sh = srcH;
+
+      if (srcRatio > dstRatio) {
+        sw = srcH * dstRatio;
+        sx = (srcW - sw) / 2;
+      } else {
+        sh = srcW / dstRatio;
+        sy = (srcH - sh) / 2;
+      }
+
+      ctx.drawImage(source, sx, sy, sw, sh, dstX, dstY, dstW, dstH);
+    };
+
     // 캔버스 합성 드로잉 루프 (20fps)
     const drawCompositeFrame = () => {
       frameCount += 1;
@@ -670,23 +686,59 @@ export default function CallPage() {
       ctx.fillStyle = "#0A0F1D";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      // 원격 산타 아바타 비디오 엘리먼트 탐색
+      // 원격 산타 아바타 비디오 엘리먼트 탐색 (비율 왜곡 없는 중앙 크롭 렌더링)
       let drewRemoteVideo = false;
       if (stageContainerRef.current) {
         const videos = stageContainerRef.current.querySelectorAll("video");
         videos.forEach((v) => {
-          if (v !== childPipVideoRef.current && v.readyState >= 2 && v.videoWidth > 0) {
+          if (
+            v !== childPipVideoRef.current &&
+            v.readyState >= 2 &&
+            v.videoWidth > 0 &&
+            v.videoHeight > 0
+          ) {
             try {
-              ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+              drawImageCover(
+                v,
+                v.videoWidth,
+                v.videoHeight,
+                0,
+                0,
+                canvas.width,
+                canvas.height
+              );
               drewRemoteVideo = true;
             } catch {
               // ignore CORS or draw error
             }
           }
         });
+
+        // 비디오가 없을 때 모션 루프 산타 스테이지 이미지가 있으면 비율 유지하여 렌더링
+        if (!drewRemoteVideo) {
+          const stageImgs = stageContainerRef.current.querySelectorAll("img");
+          stageImgs.forEach((img) => {
+            if (!drewRemoteVideo && img.complete && img.naturalWidth > 0 && img.naturalHeight > 0) {
+              try {
+                drawImageCover(
+                  img,
+                  img.naturalWidth,
+                  img.naturalHeight,
+                  0,
+                  0,
+                  canvas.width,
+                  canvas.height
+                );
+                drewRemoteVideo = true;
+              } catch {
+                // ignore
+              }
+            }
+          });
+        }
       }
 
-      // 2. 아바타 비디오가 없을 때는 음성 중심 산타 스테이지 렌더링
+      // 2. 아바타 비디오나 이미지가 없을 때 폴백 산타 스테이지 렌더링
       if (!drewRemoteVideo) {
         const grad = ctx.createRadialGradient(270, 340, 20, 270, 340, 260);
         grad.addColorStop(0, "rgba(158, 27, 32, 0.28)");
@@ -744,9 +796,15 @@ export default function CallPage() {
       ctx.textAlign = "left";
       ctx.fillText(`산타할아버지 · ${formatTime(st.elapsedSec)}`, 62, 53);
 
-      // 4. 우측 상단 우리 아이 전면 카메라 PIP 합성
+      // 4. 우측 상단 우리 아이 전면 카메라 PIP 합성 (비율 왜곡 없는 중앙 크롭)
       const pipVid = childPipVideoRef.current;
-      if (st.camEnabled && pipVid && pipVid.readyState >= 2 && pipVid.videoWidth > 0) {
+      if (
+        st.camEnabled &&
+        pipVid &&
+        pipVid.readyState >= 2 &&
+        pipVid.videoWidth > 0 &&
+        pipVid.videoHeight > 0
+      ) {
         const pipX = 382;
         const pipY = 32;
         const pipW = 130;
@@ -757,10 +815,10 @@ export default function CallPage() {
         ctx.roundRect(pipX, pipY, pipW, pipH, 18);
         ctx.clip();
 
-        // 좌우 반전(거울 모드) 그리기
+        // 좌우 반전(거울 모드) + 비율 유지 그리기
         ctx.translate(pipX + pipW, pipY);
         ctx.scale(-1, 1);
-        ctx.drawImage(pipVid, 0, 0, pipW, pipH);
+        drawImageCover(pipVid, pipVid.videoWidth, pipVid.videoHeight, 0, 0, pipW, pipH);
         ctx.restore();
 
         ctx.beginPath();
@@ -780,44 +838,20 @@ export default function CallPage() {
         ctx.fillText(st.displayName, pipX + pipW / 2, pipY + pipH - 17);
       }
 
-      // 5. 활성화된 마법 이펙트 합성
+      // 5. 활성화된 마법 이펙트 합성 (산타 얼굴을 가리지 않도록 좌측 상단 소형 배지로만 표시)
       if (st.activeMagic) {
-        ctx.fillStyle = "rgba(17, 24, 39, 0.92)";
+        ctx.fillStyle = "rgba(17, 24, 39, 0.9)";
         ctx.beginPath();
-        ctx.roundRect(70, 100, 400, 40, 20);
+        ctx.roundRect(28, 84, 245, 36, 14);
         ctx.fill();
-        ctx.strokeStyle = "#D4AF37";
-        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = "rgba(212, 175, 55, 0.65)";
+        ctx.lineWidth = 1.2;
         ctx.stroke();
 
         ctx.fillStyle = "#F9F6F0";
-        ctx.font = "bold 14px sans-serif";
-        ctx.textAlign = "center";
-        ctx.fillText(`✨ ${st.activeMagic.label}`, 270, 121);
-
-        if (st.activeMagic.effect === "stamp") {
-          ctx.beginPath();
-          ctx.arc(270, 520, 76, 0, Math.PI * 2);
-          ctx.fillStyle = "rgba(17, 24, 39, 0.95)";
-          ctx.fill();
-          ctx.lineWidth = 4;
-          ctx.strokeStyle = "#D4AF37";
-          ctx.stroke();
-
-          ctx.fillStyle = "#D4AF37";
-          ctx.font = "bold 12px sans-serif";
-          ctx.fillText("NORTH POLE OFFICIAL", 270, 495);
-          ctx.fillStyle = "#F9F6F0";
-          ctx.font = "bold 18px sans-serif";
-          ctx.fillText("착한 어린이 인증 ⭐", 270, 525);
-        } else if (st.activeMagic.effect === "snow") {
-          ctx.font = "22px sans-serif";
-          for (let i = 0; i < 8; i++) {
-            const sx = ((i * 67 + frameCount * 2) % 480) + 30;
-            const sy = ((i * 95 + frameCount * 6) % 620) + 120;
-            ctx.fillText("❄️", sx, sy);
-          }
-        }
+        ctx.font = "bold 11px sans-serif";
+        ctx.textAlign = "left";
+        ctx.fillText(`✨ ${st.activeMagic.label.slice(0, 20)}`, 40, 106);
       }
 
       // 6. 하단 실시간 자막 박스 합성
@@ -974,37 +1008,29 @@ export default function CallPage() {
     [triggerMagicEffect]
   );
 
-  // 백엔드 산타 AI의 실제 음성 대사 & 아이 음성 인식 결과를 실시간 자막 및 마법 이펙트에 반영
+  // 백엔드 산타 AI의 실제 음성 대사 & 아이 음성 인식 결과를 실시간 자막에 반영
   const handleRemoteTranscript = useCallback(
     (speaker: "santa" | "child", text: string) => {
       // loop / hybrid 모드에서는 첫 음성 도착 시 즉시 화면 오픈, anam / simli 단독 모드에서는 비디오 트랙 도착 시 오픈
       if (avatarMode === "loop" || avatarMode === "hybrid") {
         setCallPhase((prev) => (prev === "dialing" ? "connected" : prev));
       }
+      const currentElapsed = latestStateRef.current.elapsedSec;
       setTranscript((prev) => [
         ...prev,
         {
           id: `${speaker}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           speaker,
           text,
-          timestamp: formatTime(elapsedSec),
+          timestamp: formatTime(currentElapsed),
         },
       ]);
       if (speaker === "santa") {
         setSantaSpeaking(true);
         setTimeout(() => setSantaSpeaking(false), 3200);
-
-        // 산타 대사 키워드에 따른 자동 마법 이펙트 동기화
-        if (text.includes("루돌프") || text.includes("썰매")) {
-          triggerMagicEffect("rudolph", "루돌프가 반짝이는 코로 인사해요! 🦌");
-        } else if (text.includes("약속") || text.includes("손가락") || text.includes("도장")) {
-          triggerMagicEffect("stamp", "산타할아버지와 착한 어린이 약속 도장 쾅! ⭐");
-        } else if (text.includes("선물") || text.includes("수첩")) {
-          triggerMagicEffect("gift", "북극 마법 수첩에 선물이 기록 중이에요! 🎁");
-        }
       }
     },
-    [avatarMode, elapsedSec, triggerMagicEffect]
+    [avatarMode]
   );
 
   // 선택형 대화 칩 또는 키보드 입력 전송
@@ -1305,11 +1331,7 @@ export default function CallPage() {
             videoEnabled={camEnabled}
             childName={displayName || "나"}
             videoRef={childPipVideoRef}
-            onPermissionDenied={() => {
-              setCamEnabled(false);
-              setCamPermissionWarning(true);
-              setTimeout(() => setCamPermissionWarning(false), 4000);
-            }}
+            onPermissionDenied={handleCamPermissionDenied}
           />
         </div>
 
