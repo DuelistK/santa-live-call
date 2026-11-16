@@ -436,6 +436,9 @@ export default function CallPage() {
   const livekitChatSenderRef = useRef<((text: string) => void) | null>(null);
   const stageContainerRef = useRef<HTMLDivElement | null>(null);
   const childPipVideoRef = useRef<HTMLVideoElement | null>(null);
+  const talkingLoopVideoRef = useRef<HTMLVideoElement | null>(null);
+  const listeningLoopVideoRef = useRef<HTMLVideoElement | null>(null);
+  const santaStageImgRef = useRef<HTMLImageElement | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
@@ -543,12 +546,27 @@ export default function CallPage() {
     requestMicPermission();
     fetchConnectionToken();
 
+    // 녹화 캔버스에서 첫 프레임부터 실사 산타가 그려지도록 배경 이미지를 사전 로드
+    if (typeof window !== "undefined") {
+      const preloadImg = new window.Image();
+      preloadImg.src = "/images/santa-live-stage.png";
+      santaStageImgRef.current = preloadImg;
+    }
+
     return () => {
       micStreamRef.current?.getTracks().forEach((t) => t.stop());
       if (magicTimerRef.current) clearTimeout(magicTimerRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 통화 연결 시 모션 루프 비디오(Listening / Talking) 자동 재생 보장
+  useEffect(() => {
+    if (callPhase === "connected") {
+      listeningLoopVideoRef.current?.play().catch(() => {});
+      talkingLoopVideoRef.current?.play().catch(() => {});
+    }
+  }, [callPhase]);
 
   // 4종 모드별 통화 연결 전환 타이밍 제어
   // - loop / hybrid: 약 1.4초 발신 신호음 후 즉시 대안 B(시네마틱 모션 루프 스테이지)로 오픈
@@ -686,13 +704,18 @@ export default function CallPage() {
       ctx.fillStyle = "#0A0F1D";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      // 원격 산타 아바타 비디오 엘리먼트 탐색 (비율 왜곡 없는 중앙 크롭 렌더링)
-      let drewRemoteVideo = false;
-      if (stageContainerRef.current) {
+      // 2. 산타할아버지 메인 화면 렌더링 (이모티콘 없이 100% 실사 아바타/모션루프 영상만 합성)
+      let drewSantaStage = false;
+
+      // (우선순위 1) 실시간 WebRTC 아바타 비디오 트랙 (Anam / Simli / Hybrid 연결 완료 시)
+      if (stageContainerRef.current && avatarMode !== "loop") {
         const videos = stageContainerRef.current.querySelectorAll("video");
         videos.forEach((v) => {
           if (
+            !drewSantaStage &&
             v !== childPipVideoRef.current &&
+            v !== talkingLoopVideoRef.current &&
+            v !== listeningLoopVideoRef.current &&
             v.readyState >= 2 &&
             v.videoWidth > 0 &&
             v.videoHeight > 0
@@ -707,74 +730,66 @@ export default function CallPage() {
                 canvas.width,
                 canvas.height
               );
-              drewRemoteVideo = true;
+              drewSantaStage = true;
             } catch {
-              // ignore CORS or draw error
+              // ignore
             }
           }
         });
+      }
 
-        // 비디오가 없을 때 모션 루프 산타 스테이지 이미지가 있으면 비율 유지하여 렌더링
-        if (!drewRemoteVideo) {
-          const stageImgs = stageContainerRef.current.querySelectorAll("img");
-          stageImgs.forEach((img) => {
-            if (!drewRemoteVideo && img.complete && img.naturalWidth > 0 && img.naturalHeight > 0) {
-              try {
-                drawImageCover(
-                  img,
-                  img.naturalWidth,
-                  img.naturalHeight,
-                  0,
-                  0,
-                  canvas.width,
-                  canvas.height
-                );
-                drewRemoteVideo = true;
-              } catch {
-                // ignore
-              }
-            }
-          });
+      // (우선순위 2) HD 모션 루프 비디오 (대안 B 단독 모드 또는 WebRTC 연결 전 구간)
+      if (!drewSantaStage) {
+        const primaryLoopVid = st.santaSpeaking
+          ? talkingLoopVideoRef.current
+          : listeningLoopVideoRef.current;
+        const secondaryLoopVid = st.santaSpeaking
+          ? listeningLoopVideoRef.current
+          : talkingLoopVideoRef.current;
+        const candidateVid =
+          primaryLoopVid && primaryLoopVid.readyState >= 2 && primaryLoopVid.videoWidth > 0
+            ? primaryLoopVid
+            : secondaryLoopVid && secondaryLoopVid.readyState >= 2 && secondaryLoopVid.videoWidth > 0
+            ? secondaryLoopVid
+            : null;
+
+        if (candidateVid) {
+          try {
+            drawImageCover(
+              candidateVid,
+              candidateVid.videoWidth,
+              candidateVid.videoHeight,
+              0,
+              0,
+              canvas.width,
+              canvas.height
+            );
+            drewSantaStage = true;
+          } catch {
+            // ignore
+          }
         }
       }
 
-      // 2. 아바타 비디오나 이미지가 없을 때 폴백 산타 스테이지 렌더링
-      if (!drewRemoteVideo) {
-        const grad = ctx.createRadialGradient(270, 340, 20, 270, 340, 260);
-        grad.addColorStop(0, "rgba(158, 27, 32, 0.28)");
-        grad.addColorStop(1, "rgba(10, 15, 29, 0)");
-        ctx.fillStyle = grad;
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-        // 골드 파동 링
-        const pulseRadius = st.santaSpeaking ? 115 + Math.sin(frameCount * 0.25) * 12 : 108;
-        ctx.beginPath();
-        ctx.arc(270, 370, pulseRadius, 0, Math.PI * 2);
-        ctx.strokeStyle = "rgba(212, 175, 55, 0.35)";
-        ctx.lineWidth = 2;
-        ctx.stroke();
-
-        // 산타 원형 프레임
-        ctx.beginPath();
-        ctx.arc(270, 370, 84, 0, Math.PI * 2);
-        ctx.fillStyle = "#111827";
-        ctx.fill();
-        ctx.lineWidth = 3;
-        ctx.strokeStyle = "#D4AF37";
-        ctx.stroke();
-
-        ctx.font = "72px sans-serif";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText("🎅", 270, 374);
-
-        ctx.fillStyle = "#D4AF37";
-        ctx.font = "600 13px sans-serif";
-        ctx.fillText("NORTH POLE LIVE", 270, 215);
-
-        ctx.fillStyle = "#F9F6F0";
-        ctx.font = "bold 28px sans-serif";
-        ctx.fillText("산타할아버지", 270, 250);
+      // (우선순위 3) 비디오 첫 프레임 디코딩 직전 0초 구간의 사전 로드된 실사 산타 이미지
+      if (!drewSantaStage) {
+        const preloadImg = santaStageImgRef.current;
+        if (preloadImg && preloadImg.complete && preloadImg.naturalWidth > 0) {
+          try {
+            drawImageCover(
+              preloadImg,
+              preloadImg.naturalWidth,
+              preloadImg.naturalHeight,
+              0,
+              0,
+              canvas.width,
+              canvas.height
+            );
+            drewSantaStage = true;
+          } catch {
+            // ignore
+          }
+        }
       }
 
       // 3. 상단 상태 배지 & 타이머
@@ -927,7 +942,10 @@ export default function CallPage() {
           }
         }
 
-        // LiveKit RoomAudioRenderer가 생성한 원격 <audio> 엘리먼트 스트림 자동 연결
+        // LiveKit RoomAudioRenderer가 생성한 원격 <audio> 엘리먼트 스트림 자동 연결 + 실시간 발화 에너지 감지
+        let remoteAnalyser: AnalyserNode | null = null;
+        let lastVoiceActiveAt = 0;
+
         const attachRemoteAudioElements = () => {
           const activeAudioCtx = audioCtx;
           if (!activeAudioCtx) return;
@@ -939,16 +957,38 @@ export default function CallPage() {
               try {
                 const remoteSource = activeAudioCtx.createMediaStreamSource(mediaStream);
                 remoteSource.connect(dest);
+                if (!remoteAnalyser) {
+                  remoteAnalyser = activeAudioCtx.createAnalyser();
+                  remoteAnalyser.fftSize = 256;
+                  remoteSource.connect(remoteAnalyser);
+                }
                 attachedElements.add(el);
               } catch {
                 // ignore
               }
             }
           });
+
+          if (remoteAnalyser) {
+            const dataArr = new Uint8Array(remoteAnalyser.frequencyBinCount);
+            remoteAnalyser.getByteFrequencyData(dataArr);
+            let sum = 0;
+            for (let i = 0; i < dataArr.length; i += 1) {
+              sum += dataArr[i];
+            }
+            const avgEnergy = sum / dataArr.length;
+            const now = Date.now();
+            if (avgEnergy > 8) {
+              lastVoiceActiveAt = now;
+              setSantaSpeaking(true);
+            } else if (lastVoiceActiveAt > 0 && now - lastVoiceActiveAt > 450) {
+              setSantaSpeaking(false);
+            }
+          }
         };
 
         attachRemoteAudioElements();
-        audioScanInterval = setInterval(attachRemoteAudioElements, 1000);
+        audioScanInterval = setInterval(attachRemoteAudioElements, 140);
 
         dest.stream.getAudioTracks().forEach((t) => combinedTracks.push(t));
       }
@@ -1179,107 +1219,104 @@ export default function CallPage() {
       {/* 실시간 마법 이펙트 오버레이 (눈꽃 파티클, 착한 어린이 도장, 루돌프 코, 선물 수첩) */}
       <SantaMagicStageOverlay magic={activeMagic} />
 
-      {/* 상단/하단 은은한 비네팅 */}
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-36 bg-gradient-to-b from-[#0A0F1D]/85 to-transparent z-10" />
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-64 bg-gradient-to-t from-[#0A0F1D] via-[#0A0F1D]/80 to-transparent z-10" />
-
       {/* ============================================================
-          중앙 스테이지:
-          - 발신 중(dialing): 전화 연결 신호음 대기 화면
-          - 대안 B(loop) 또는 하이브리드(hybrid) 초기 구간: 시네마틱 산타 모션 루프 스테이지
-          - 실시간 아바타(anam/simli/hybrid 연결 완료): WebRTC 비디오 스트림으로 전환
+          HD 모션 루프 산타 비디오 스테이지 (대안 B 단독 모드 및 하이브리드/WebRTC 대기 구간)
+          - santaSpeaking === true 일 때: 실제 산타 발화 모션 비디오 (/videos/santa-talking.mp4)
+          - santaSpeaking === false 일 때: 실제 산타 경청/끄덕임 모션 비디오 (/videos/santa-listening.mp4)
       ============================================================ */}
       <div
-        className={`absolute inset-0 flex flex-col items-center justify-center px-6 transition-opacity duration-700 ${
-          callPhase === "connected" && avatarMode !== "loop" && hasRemoteAvatarVideo
-            ? "opacity-0 pointer-events-none z-0"
-            : "opacity-100 z-10"
+        className={`pointer-events-none absolute inset-0 overflow-hidden transition-opacity duration-500 ${
+          callPhase === "connected" && (avatarMode === "loop" || !hasRemoteAvatarVideo)
+            ? "opacity-100 z-10"
+            : "opacity-0 z-0"
         }`}
       >
-        {/* 대안 B(모션 루프) 및 하이브리드 대기 중일 때 고화질 산타 공방 모션 루프 배경 */}
-        {callPhase === "connected" && (
-          <div className="pointer-events-none absolute inset-0 overflow-hidden">
-            <img
-              src="/images/santa-live-stage.png"
-              alt="북극 산타할아버지 모션 루프 스테이지"
-              className={`w-full h-full object-cover transition-transform duration-1000 ease-in-out ${
-                santaSpeaking
-                  ? "scale-[1.06] translate-y-[-4px]"
-                  : "scale-[1.01] translate-y-[2px]"
-              }`}
-            />
-            <div className="absolute inset-0 bg-gradient-to-b from-[#0A0F1D]/55 via-transparent to-[#0A0F1D]/85" />
-          </div>
-        )}
+        <video
+          ref={listeningLoopVideoRef}
+          src="/videos/santa-listening.mp4"
+          poster="/images/santa-live-stage.png"
+          autoPlay
+          loop
+          muted
+          playsInline
+          preload="auto"
+          className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${
+            santaSpeaking ? "opacity-0" : "opacity-100"
+          }`}
+        />
+        <video
+          ref={talkingLoopVideoRef}
+          src="/videos/santa-talking.mp4"
+          poster="/images/santa-live-stage.png"
+          autoPlay
+          loop
+          muted
+          playsInline
+          preload="auto"
+          className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${
+            santaSpeaking ? "opacity-100" : "opacity-0"
+          }`}
+        />
+      </div>
 
+      {/* 상단/하단 은은한 비네팅 */}
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-32 bg-gradient-to-b from-[#0A0F1D]/75 to-transparent z-10" />
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-56 bg-gradient-to-t from-[#0A0F1D]/95 via-[#0A0F1D]/60 to-transparent z-10" />
+
+      {/* ============================================================
+          발신 대기 오버레이 (callPhase === "dialing" 일 때만 표시)
+          통화가 연결(connected)되면 모든 모드(대안 B 포함)에서 즉시 사라져 산타 얼굴을 가리지 않음
+      ============================================================ */}
+      <div
+        className={`absolute inset-0 flex flex-col items-center justify-center px-6 transition-opacity duration-500 ${
+          callPhase === "dialing"
+            ? "opacity-100 z-10"
+            : "opacity-0 pointer-events-none z-0"
+        }`}
+      >
         <div className="pointer-events-none absolute w-80 h-80 rounded-full bg-[#9E1B20]/18 blur-[95px]" />
 
         <div className="relative flex flex-col items-center text-center -mt-12">
           <p className="text-xs font-medium tracking-widest uppercase text-[#D4AF37] mb-2">
-            {callPhase === "dialing"
-              ? "North Pole Connecting"
-              : avatarMode === "loop"
-              ? "Motion Loop Stage ($0/min)"
-              : "Voice & Avatar Live"}
+            North Pole Connecting
           </p>
           <h1 className="text-2xl font-bold text-[#F9F6F0] tracking-tight drop-shadow-md">
             산타할아버지
           </h1>
           <p className="text-sm text-[#F9F6F0]/75 mt-1 font-normal">
-            {callPhase === "dialing"
-              ? avatarMode === "anam" || avatarMode === "simli"
-                ? `${currentModeBadge} 실시간 영상 연결 중...`
-                : "북극 산타 마을로 연결 중..."
-              : formatTime(elapsedSec)}
+            {avatarMode === "anam" || avatarMode === "simli"
+              ? `${currentModeBadge} 실시간 영상 연결 중...`
+              : "북극 산타 마을로 연결 중..."}
           </p>
 
-          {/* 발신 중일 때만 중앙 아이콘 표시, 통화 연결 후(모션 루프)에는 전체 화면 산타 모션이 잘 보이도록 하단 파형만 표시 */}
-          {callPhase === "dialing" ? (
-            <div className="relative flex items-center justify-center mt-10 mb-6">
-              <div
-                className="absolute w-56 h-56 rounded-full border border-[#D4AF37]/20 scale-110 opacity-100 animate-ping"
-                style={{ animationDuration: "2.4s" }}
+          <div className="relative flex items-center justify-center mt-10 mb-6">
+            <div
+              className="absolute w-56 h-56 rounded-full border border-[#D4AF37]/20 scale-110 opacity-100 animate-ping"
+              style={{ animationDuration: "2.4s" }}
+            />
+            <div className="absolute w-44 h-44 rounded-full border border-[#D4AF37]/35" />
+
+            <div className="relative w-36 h-36 rounded-full bg-[#111827] border-2 border-[#D4AF37]/75 shadow-[0_24px_60px_rgba(0,0,0,0.7)] overflow-hidden flex flex-col items-center justify-center">
+              <img
+                src="/images/santa-portal-portrait.png"
+                alt="산타할아버지"
+                className="w-full h-full object-cover"
               />
-              <div className="absolute w-44 h-44 rounded-full border border-[#D4AF37]/35" />
-
-              <div className="relative w-36 h-36 rounded-full bg-[#111827] border-2 border-[#D4AF37]/75 shadow-[0_24px_60px_rgba(0,0,0,0.7)] overflow-hidden flex flex-col items-center justify-center">
-                <img
-                  src="/images/santa-portal-portrait.png"
-                  alt="산타할아버지"
-                  className="w-full h-full object-cover"
-                />
-              </div>
             </div>
-          ) : (
-            <div className="mt-44 flex flex-col items-center gap-2">
-              <div className="flex items-center gap-1.5 h-6 px-4 py-1.5 rounded-full bg-[#111827]/75 backdrop-blur-md border border-[#D4AF37]/40">
-                {[0, 1, 2, 3, 4, 5, 6].map((bar) => (
-                  <span
-                    key={bar}
-                    className={`w-1 rounded-full bg-[#D4AF37] transition-all duration-300 ${
-                      santaSpeaking ? "h-4 animate-bounce" : "h-1.5 opacity-40"
-                    }`}
-                    style={{ animationDelay: `${bar * 95}ms` }}
-                  />
-                ))}
-              </div>
-            </div>
-          )}
+          </div>
 
-          {callPhase === "dialing" && (
-            <button
-              type="button"
-              onClick={() => setRingMuted((m) => !m)}
-              className="mt-4 inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-white/[0.06] hover:bg-white/[0.1] border border-white/10 text-xs text-[#F9F6F0]/75 transition"
-            >
-              {ringMuted ? (
-                <VolumeX className="w-3.5 h-3.5 text-[#F9F6F0]/50" />
-              ) : (
-                <Volume2 className="w-3.5 h-3.5 text-[#D4AF37]" />
-              )}
-              <span>{ringMuted ? "연결음 꺼짐" : "연결음 켜짐"}</span>
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => setRingMuted((m) => !m)}
+            className="mt-4 inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-white/[0.06] hover:bg-white/[0.1] border border-white/10 text-xs text-[#F9F6F0]/75 transition"
+          >
+            {ringMuted ? (
+              <VolumeX className="w-3.5 h-3.5 text-[#F9F6F0]/50" />
+            ) : (
+              <Volume2 className="w-3.5 h-3.5 text-[#D4AF37]" />
+            )}
+            <span>{ringMuted ? "연결음 꺼짐" : "연결음 켜짐"}</span>
+          </button>
         </div>
       </div>
 
