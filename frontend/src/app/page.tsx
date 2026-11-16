@@ -20,7 +20,7 @@ import {
   PencilLine,
 } from "lucide-react";
 import { useSantaSession } from "@/context/SantaSessionContext";
-import { SecretSantaNote } from "@/types/santa";
+import { SantaAvatarMode, SecretSantaNote } from "@/types/santa";
 import {
   NorthPoleBackdrop,
   SantaSnowglobePortal,
@@ -38,7 +38,7 @@ const AGE_OPTIONS = [
 const QUICK_PRAISES = [
   {
     label: "친구와 사이좋게 지냄",
-    value: "친구들과 사이좋게 지내고 양보도 잘한 일",
+    value: "올해도 건강하고 밝게 자라며 친구들과 사이좋게 지낸 일",
   },
   {
     label: "골고루 밥 잘 먹음",
@@ -56,12 +56,12 @@ const QUICK_PRAISES = [
 
 const QUICK_MISSIONS = [
   {
-    label: "일찍 잠자리 들기",
-    value: "밤 9시 전에 스스로 잠자리에 들기",
+    label: "일찍 자고 양치하기",
+    value: "밤에 일찍 잠자리에 들고 스스로 깨끗이 양치질하기",
   },
   {
-    label: "깨끗이 양치하기",
-    value: "밥 먹고 잠들기 전에 스스로 깨끗이 양치질하기",
+    label: "9시 전 잠자리 들기",
+    value: "밤 9시 전에 스스로 잠자리에 들기",
   },
   {
     label: "장난감 정리하기",
@@ -78,6 +78,43 @@ const INCOMING_DELAY_OPTIONS = [
   { label: "5초 뒤 걸려오기", sec: 5 },
   { label: "15초 뒤 걸려오기", sec: 15 },
   { label: "30초 뒤 걸려오기", sec: 30 },
+];
+
+const AVATAR_MODE_OPTIONS: Array<{
+  mode: SantaAvatarMode;
+  shortLabel: string;
+  title: string;
+  desc: string;
+  costBadge: string;
+}> = [
+  {
+    mode: "anam",
+    shortLabel: "기존 (Anam)",
+    title: "기존 모드 · Anam HD",
+    desc: "고화질 실시간 아바타 단독 (준비 완료 시 연결)",
+    costBadge: "고화질",
+  },
+  {
+    mode: "simli",
+    shortLabel: "대안 A (Simli)",
+    title: "대안 A · Simli 단독",
+    desc: "초저가 실시간 립싱크 아바타 단독 (준비 완료 시 연결)",
+    costBadge: "14원/분",
+  },
+  {
+    mode: "loop",
+    shortLabel: "대안 B (루프)",
+    title: "대안 B · 모션 루프 단독",
+    desc: "외부 아바타 API 없이 0원 모션 스테이지만 사용",
+    costBadge: "0원/분",
+  },
+  {
+    mode: "hybrid",
+    shortLabel: "하이브리드",
+    title: "하이브리드 · 루프→아바타",
+    desc: "대기 없이 모션 루프로 즉시 시작 후 아바타 전환",
+    costBadge: "즉시연결",
+  },
 ];
 
 // 북극 황금 왁스실(Wax Seal) 비밀 편지 봉투 그래픽 아이콘
@@ -323,9 +360,53 @@ export default function HomePage() {
       </section>
 
       {/* ============================================================
-          하단 푸터: 메인 영상통화 CTA + 산타 수신 전화 예약 + 보조 메뉴
+          하단 푸터: 4종 영상 모드 선택기 + 메인 영상통화 CTA + 수신 전화 예약
       ============================================================ */}
-      <footer className="relative z-10 flex flex-col items-center gap-3">
+      <footer className="relative z-10 flex flex-col items-center gap-2.5">
+        {/* 런칭 전 4종 아바타·영상 모드 원터치 비교 선택 바 */}
+        <div className="w-full p-2 rounded-2xl bg-[#111A30]/85 border border-white/10 space-y-1.5">
+          <div className="flex items-center justify-between px-1">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-[#E5C158]">
+              산타 영상 모드 선택 (4종 테스트)
+            </span>
+            <span className="text-[10px] text-[#FAF7F2]/60">
+              {
+                AVATAR_MODE_OPTIONS.find(
+                  (m) => m.mode === (note.avatarProvider || "anam")
+                )?.desc
+              }
+            </span>
+          </div>
+          <div className="grid grid-cols-4 gap-1.5">
+            {AVATAR_MODE_OPTIONS.map((item) => {
+              const active = (note.avatarProvider || "anam") === item.mode;
+              return (
+                <button
+                  key={item.mode}
+                  type="button"
+                  onClick={() => setNote({ ...note, avatarProvider: item.mode })}
+                  className={`py-1.5 px-1 rounded-xl text-center transition active:scale-95 ${
+                    active
+                      ? "bg-[#E5C158] text-[#080E1E] font-extrabold shadow-[0_0_14px_rgba(229,193,88,0.4)]"
+                      : "bg-[#0A1020]/80 text-[#FAF7F2]/70 hover:text-white border border-white/10 font-semibold"
+                  }`}
+                >
+                  <div className="text-[11px] leading-tight truncate">
+                    {item.shortLabel}
+                  </div>
+                  <div
+                    className={`text-[9px] mt-0.5 ${
+                      active ? "text-[#080E1E]/80 font-bold" : "text-[#E5C158]/80"
+                    }`}
+                  >
+                    {item.costBadge}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         <button
           type="button"
           onClick={handleImmediateCall}
@@ -795,6 +876,48 @@ export default function HomePage() {
                   placeholder="예: 레고 소방차, 티니핑 인형 (선택)"
                   className="w-full h-11 pl-10 pr-3.5 rounded-xl bg-[#1A243B]/85 border border-white/15 text-sm font-medium text-[#FAF7F2] placeholder-[#FAF7F2]/35 focus:outline-none focus:border-[#E5C158]"
                 />
+              </div>
+            </div>
+
+            {/* 5. 산타 영상 렌더링 모드 선택 (4종 비교) */}
+            <div>
+              <label className="flex items-center justify-between text-xs font-semibold text-[#FAF7F2]/80 mb-2">
+                <span>🎬 산타 영상 렌더링 모드 (4종 비교)</span>
+                <span className="text-[10px] text-[#E5C158] font-bold">
+                  런칭 전 비교 테스트용
+                </span>
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                {AVATAR_MODE_OPTIONS.map((opt) => {
+                  const selected =
+                    (draft.avatarProvider || "anam") === opt.mode;
+                  return (
+                    <button
+                      key={opt.mode}
+                      type="button"
+                      onClick={() =>
+                        setDraft({ ...draft, avatarProvider: opt.mode })
+                      }
+                      className={`p-2.5 rounded-2xl text-left border transition active:scale-[0.98] ${
+                        selected
+                          ? "bg-[#E5C158]/18 border-[#E5C158] text-[#FAF7F2] shadow-[0_0_16px_rgba(229,193,88,0.2)]"
+                          : "bg-[#141D32]/90 border-white/12 text-[#FAF7F2]/70 hover:border-white/25"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-extrabold text-[#FAF7F2]">
+                          {opt.title}
+                        </span>
+                        <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[#E5C158]/20 text-[#F3DC99] font-bold">
+                          {opt.costBadge}
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-[#FAF7F2]/60 mt-1 leading-snug">
+                        {opt.desc}
+                      </p>
+                    </button>
+                  );
+                })}
               </div>
             </div>
 

@@ -76,7 +76,7 @@ from livekit.agents import (
     function_tool,
 )
 # 주의: LiveKit 플러그인들은 반드시 메인 스레드(파일 최상단)에서 import 해야 워커에 정상 등록됩니다!
-from livekit.plugins import anam, deepgram, elevenlabs, google, lemonslice, liveavatar, silero
+from livekit.plugins import anam, deepgram, elevenlabs, google, lemonslice, liveavatar, silero, simli
 
 load_dotenv()
 
@@ -212,24 +212,63 @@ def build_santa_system_prompt(note: SecretSantaNote) -> str:
 
 
 # =====================================================================
-# 3. 실시간 아바타 팩토리 (Anam [기본] <-> LemonSlice <-> HeyGen 스위칭)
+# 3. 실시간 아바타 팩토리 (4종 모드: anam | simli | loop | hybrid + lemonslice/heygen)
 # =====================================================================
 class AvatarFactory:
     """
-    환경변수 `AVATAR_PROVIDER` ('anam' | 'lemonslice' | 'heygen')에 따라
+    환경변수 또는 프론트엔드 선택 모드(`anam` | `simli` | `loop` | `hybrid` | `lemonslice` | `heygen`)에 따라
     오디오-투-비디오(Audio-to-Video) 실시간 아바타 세션을 생성하는 팩토리 클래스입니다.
     """
 
     @staticmethod
     def create_avatar_session(override_provider: Optional[str] = None) -> Optional[Any]:
         provider = (override_provider or os.getenv("AVATAR_PROVIDER", "anam")).strip().lower()
-        logger.info("Initializing real-time avatar provider: %s", provider)
+        logger.info("Initializing avatar mode: %s", provider)
+
+        # 대안 B 단독 모드: 유료 아바타 API 호출을 완전히 생략하고 프론트엔드 0원 모션 루프 스테이지 사용
+        if provider == "loop":
+            logger.info("Mode 'loop' (Option B only) selected — skipping external avatar API ($0/min).")
+            return None
+
+        # 대안 A 단독 모드: Simli 초저가($0.01/분) 실시간 립싱크 아바타
+        if provider == "simli":
+            simli_session = AvatarFactory._create_simli_avatar()
+            if simli_session is not None:
+                return simli_session
+            logger.warning("SIMLI_API_KEY not set yet; falling back to Anam avatar for testing.")
+            return AvatarFactory._create_anam_avatar()
+
+        # 하이브리드 모드: 프론트엔드에서 즉시 모션 루프로 시작한 뒤 백엔드 실시간 아바타(Simli 우선, 없으면 Anam)로 자동 전환
+        if provider == "hybrid":
+            return AvatarFactory._create_simli_avatar() or AvatarFactory._create_anam_avatar()
 
         if provider == "heygen":
             return AvatarFactory._create_heygen_liveavatar()
         if provider == "lemonslice":
             return AvatarFactory._create_lemonslice_avatar()
         return AvatarFactory._create_anam_avatar()
+
+    @staticmethod
+    def _create_simli_avatar() -> Optional[Any]:
+        api_key = os.getenv("SIMLI_API_KEY", "").strip()
+        face_id = os.getenv("SIMLI_FACE_ID", "tmp9i8bbq7c").strip()
+
+        if not api_key or api_key.startswith("your_"):
+            logger.warning(
+                "SIMLI_API_KEY is not configured in .env."
+            )
+            return None
+
+        try:
+            return simli.AvatarSession(
+                simli_config=simli.SimliConfig(
+                    api_key=api_key,
+                    face_id=face_id,
+                ),
+            )
+        except Exception as exc:
+            logger.error("Failed to initialize Simli AvatarSession: %s", exc)
+            return None
 
     @staticmethod
     def _create_anam_avatar() -> Optional[Any]:

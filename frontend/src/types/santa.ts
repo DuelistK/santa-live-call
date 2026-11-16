@@ -1,6 +1,14 @@
-// 산타 통화 설정, 리포트, 마법 이펙트 및 WebRTC 연결을 위한 공통 타입 정의
+// 산타 통화 설정, 아바타 렌더링 4종 모드, 리포트, 마법 이펙트 및 WebRTC 연결을 위한 공통 타입 정의
 
 export type SantaMagicEffectType = "snow" | "stamp" | "rudolph" | "gift";
+
+export type SantaAvatarMode =
+  | "anam"
+  | "simli"
+  | "loop"
+  | "hybrid"
+  | "lemonslice"
+  | "heygen";
 
 export interface SantaMagicEvent {
   id: string;
@@ -22,7 +30,7 @@ export interface SecretSantaNote {
   praise: string;
   mission: string;
   giftHint: string;
-  avatarProvider?: "anam" | "lemonslice" | "heygen";
+  avatarProvider?: SantaAvatarMode;
   previousMemory?: PreviousCallMemory;
 }
 

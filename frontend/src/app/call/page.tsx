@@ -419,6 +419,14 @@ export default function CallPage() {
 
   const displayName =
     note.childName && note.childName !== "우리 아이" ? note.childName : "";
+  const avatarMode = note.avatarProvider || "anam";
+  const modeLabelMap: Record<string, string> = {
+    anam: "기존(Anam HD)",
+    simli: "대안A(Simli)",
+    loop: "대안B(0원 루프)",
+    hybrid: "하이브리드",
+  };
+  const currentModeBadge = modeLabelMap[avatarMode] || "기존(Anam HD)";
 
   const [connDetails, setConnDetails] = useState<ConnectionDetailsResponse | null>(null);
   const [connectionError, setConnectionError] = useState<string | null>(null);
@@ -555,11 +563,13 @@ export default function CallPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 토큰 발급 후 발신 연출(약 1.8초) 뒤 통화 화면으로 전환 + 첫 마법 눈꽃 효과
+  // 4종 모드별 통화 연결 전환 타이밍 제어
+  // - loop / hybrid: 약 1.4초 발신 신호음 후 즉시 대안 B(시네마틱 모션 루프 스테이지)로 오픈
+  // - anam / simli (단독 모드): 실제 실시간 아바타 비디오 첫 프레임이 도착할 때까지 발신 신호음 화면 유지 (최대 5.8초 안전 타임아웃)
   useEffect(() => {
     if (callPhase !== "dialing" || !connDetails) return;
 
-    const timer = setTimeout(() => {
+    const activateConnectedPhase = () => {
       setCallPhase("connected");
       triggerMagicEffect("snow", "산타할아버지와 북극 직통 전화가 연결되었어요! ❄️");
       setTranscript((prev) =>
@@ -576,10 +586,29 @@ export default function CallPage() {
               },
             ]
       );
-    }, 1800);
+    };
 
+    // 단독 아바타 모드(anam/simli)에서 이미 아바타 비디오 트랙이 도착했다면 즉시 오픈
+    if ((avatarMode === "anam" || avatarMode === "simli") && hasRemoteAvatarVideo) {
+      activateConnectedPhase();
+      return;
+    }
+
+    const waitMs =
+      avatarMode === "loop" || avatarMode === "hybrid" || connDetails.demoMode
+        ? 1400
+        : 5800;
+
+    const timer = setTimeout(activateConnectedPhase, waitMs);
     return () => clearTimeout(timer);
-  }, [callPhase, connDetails, displayName, triggerMagicEffect]);
+  }, [
+    callPhase,
+    connDetails,
+    avatarMode,
+    hasRemoteAvatarVideo,
+    displayName,
+    triggerMagicEffect,
+  ]);
 
   // 통화 시간 타이머
   useEffect(() => {
@@ -948,7 +977,10 @@ export default function CallPage() {
   // 백엔드 산타 AI의 실제 음성 대사 & 아이 음성 인식 결과를 실시간 자막 및 마법 이펙트에 반영
   const handleRemoteTranscript = useCallback(
     (speaker: "santa" | "child", text: string) => {
-      setCallPhase((prev) => (prev === "dialing" ? "connected" : prev));
+      // loop / hybrid 모드에서는 첫 음성 도착 시 즉시 화면 오픈, anam / simli 단독 모드에서는 비디오 트랙 도착 시 오픈
+      if (avatarMode === "loop" || avatarMode === "hybrid") {
+        setCallPhase((prev) => (prev === "dialing" ? "connected" : prev));
+      }
       setTranscript((prev) => [
         ...prev,
         {
@@ -972,7 +1004,7 @@ export default function CallPage() {
         }
       }
     },
-    [elapsedSec, triggerMagicEffect]
+    [avatarMode, elapsedSec, triggerMagicEffect]
   );
 
   // 선택형 대화 칩 또는 키보드 입력 전송
@@ -1126,63 +1158,85 @@ export default function CallPage() {
       <div className="pointer-events-none absolute inset-x-0 bottom-0 h-64 bg-gradient-to-t from-[#0A0F1D] via-[#0A0F1D]/80 to-transparent z-10" />
 
       {/* ============================================================
-          중앙 스테이지: 음성 중심 산타 비주얼 및 발신 연결 애니메이션
+          중앙 스테이지:
+          - 발신 중(dialing): 전화 연결 신호음 대기 화면
+          - 대안 B(loop) 또는 하이브리드(hybrid) 초기 구간: 시네마틱 산타 모션 루프 스테이지
+          - 실시간 아바타(anam/simli/hybrid 연결 완료): WebRTC 비디오 스트림으로 전환
       ============================================================ */}
       <div
         className={`absolute inset-0 flex flex-col items-center justify-center px-6 transition-opacity duration-700 ${
-          callPhase === "connected" && hasRemoteAvatarVideo
+          callPhase === "connected" && avatarMode !== "loop" && hasRemoteAvatarVideo
             ? "opacity-0 pointer-events-none z-0"
             : "opacity-100 z-10"
         }`}
       >
+        {/* 대안 B(모션 루프) 및 하이브리드 대기 중일 때 고화질 산타 공방 모션 루프 배경 */}
+        {callPhase === "connected" && (
+          <div className="pointer-events-none absolute inset-0 overflow-hidden">
+            <img
+              src="/images/santa-live-stage.png"
+              alt="북극 산타할아버지 모션 루프 스테이지"
+              className={`w-full h-full object-cover transition-transform duration-1000 ease-in-out ${
+                santaSpeaking
+                  ? "scale-[1.06] translate-y-[-4px]"
+                  : "scale-[1.01] translate-y-[2px]"
+              }`}
+            />
+            <div className="absolute inset-0 bg-gradient-to-b from-[#0A0F1D]/55 via-transparent to-[#0A0F1D]/85" />
+          </div>
+        )}
+
         <div className="pointer-events-none absolute w-80 h-80 rounded-full bg-[#9E1B20]/18 blur-[95px]" />
 
         <div className="relative flex flex-col items-center text-center -mt-12">
           <p className="text-xs font-medium tracking-widest uppercase text-[#D4AF37] mb-2">
-            {callPhase === "dialing" ? "North Pole Connecting" : "Voice & Avatar Live"}
+            {callPhase === "dialing"
+              ? "North Pole Connecting"
+              : avatarMode === "loop"
+              ? "Motion Loop Stage ($0/min)"
+              : "Voice & Avatar Live"}
           </p>
-          <h1 className="text-2xl font-bold text-[#F9F6F0] tracking-tight">
+          <h1 className="text-2xl font-bold text-[#F9F6F0] tracking-tight drop-shadow-md">
             산타할아버지
           </h1>
-          <p className="text-sm text-[#F9F6F0]/60 mt-1 font-normal">
+          <p className="text-sm text-[#F9F6F0]/75 mt-1 font-normal">
             {callPhase === "dialing"
-              ? "북극 산타 마을로 연결 중..."
+              ? avatarMode === "anam" || avatarMode === "simli"
+                ? `${currentModeBadge} 실시간 영상 연결 중...`
+                : "북극 산타 마을로 연결 중..."
               : formatTime(elapsedSec)}
           </p>
 
-          <div className="relative flex items-center justify-center mt-10 mb-6">
-            <div
-              className={`absolute w-56 h-56 rounded-full border border-[#D4AF37]/20 transition-all duration-700 ${
-                callPhase === "dialing" || santaSpeaking
-                  ? "scale-110 opacity-100 animate-ping"
-                  : "scale-95 opacity-25"
-              }`}
-              style={{ animationDuration: "2.4s" }}
-            />
-            <div
-              className={`absolute w-44 h-44 rounded-full border border-[#D4AF37]/35 transition-transform duration-500 ${
-                santaSpeaking ? "scale-105" : "scale-100"
-              }`}
-            />
+          {/* 발신 중일 때만 중앙 아이콘 표시, 통화 연결 후(모션 루프)에는 전체 화면 산타 모션이 잘 보이도록 하단 파형만 표시 */}
+          {callPhase === "dialing" ? (
+            <div className="relative flex items-center justify-center mt-10 mb-6">
+              <div
+                className="absolute w-56 h-56 rounded-full border border-[#D4AF37]/20 scale-110 opacity-100 animate-ping"
+                style={{ animationDuration: "2.4s" }}
+              />
+              <div className="absolute w-44 h-44 rounded-full border border-[#D4AF37]/35" />
 
-            <div className="relative w-36 h-36 rounded-full bg-[#111827] border-2 border-[#D4AF37]/75 shadow-[0_24px_60px_rgba(0,0,0,0.7)] flex flex-col items-center justify-center">
-              <span className="text-7xl select-none" role="img" aria-label="산타할아버지">
-                🎅
-              </span>
-            </div>
-          </div>
-
-          {callPhase === "connected" && (
-            <div className="flex items-center gap-1.5 h-5 mt-1">
-              {[0, 1, 2, 3, 4].map((bar) => (
-                <span
-                  key={bar}
-                  className={`w-1 rounded-full bg-[#D4AF37] transition-all duration-300 ${
-                    santaSpeaking ? "h-4 animate-bounce" : "h-1.5 opacity-40"
-                  }`}
-                  style={{ animationDelay: `${bar * 110}ms` }}
+              <div className="relative w-36 h-36 rounded-full bg-[#111827] border-2 border-[#D4AF37]/75 shadow-[0_24px_60px_rgba(0,0,0,0.7)] overflow-hidden flex flex-col items-center justify-center">
+                <img
+                  src="/images/santa-portal-portrait.png"
+                  alt="산타할아버지"
+                  className="w-full h-full object-cover"
                 />
-              ))}
+              </div>
+            </div>
+          ) : (
+            <div className="mt-44 flex flex-col items-center gap-2">
+              <div className="flex items-center gap-1.5 h-6 px-4 py-1.5 rounded-full bg-[#111827]/75 backdrop-blur-md border border-[#D4AF37]/40">
+                {[0, 1, 2, 3, 4, 5, 6].map((bar) => (
+                  <span
+                    key={bar}
+                    className={`w-1 rounded-full bg-[#D4AF37] transition-all duration-300 ${
+                      santaSpeaking ? "h-4 animate-bounce" : "h-1.5 opacity-40"
+                    }`}
+                    style={{ animationDelay: `${bar * 95}ms` }}
+                  />
+                ))}
+              </div>
             </div>
           )}
 
@@ -1231,6 +1285,9 @@ export default function CallPage() {
                   REC
                 </span>
               )}
+              <span className="pl-1.5 ml-1 border-l border-white/15 text-[10px] font-semibold text-[#D4AF37]">
+                {currentModeBadge}
+              </span>
             </div>
 
             {detectedGifts.length > 0 && callPhase === "connected" && (
