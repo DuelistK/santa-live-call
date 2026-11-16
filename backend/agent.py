@@ -57,8 +57,13 @@ def _configure_windows_ca_bundle() -> None:
 
         # Python 3.14 OpenSSL VERIFY_X509_STRICT 플래그가 사내 루트 인증서의 Missing Authority Key Identifier를
         # 거부하지 않도록 기본 SSLContext 생성 시 VERIFY_X509_STRICT 플래그를 해제하고,
-        # 매번 디스크에서 대용량 PEM을 다시 파싱해 이벤트 루프가 블로킹되는 현상을 방지합니다.
+        # 프로세스 시작 시 1회만 인증서 번들을 파싱하여 이벤트 루프 블로킹(오디오 지연)을 완전히 제거합니다.
         _orig_create_default_context = ssl.create_default_context
+        _shared_server_auth_ctx = _orig_create_default_context(
+            ssl.Purpose.SERVER_AUTH, cafile=bundle_path
+        )
+        if hasattr(ssl, "VERIFY_X509_STRICT"):
+            _shared_server_auth_ctx.verify_flags &= ~ssl.VERIFY_X509_STRICT
 
         def _relaxed_create_default_context(
             purpose: Any = ssl.Purpose.SERVER_AUTH,
@@ -67,16 +72,10 @@ def _configure_windows_ca_bundle() -> None:
             capath: Any = None,
             cadata: Any = None,
         ) -> ssl.SSLContext:
-            if cafile is None and capath is None and cadata is None:
-                ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-                ctx.check_hostname = True
-                ctx.verify_mode = ssl.CERT_REQUIRED
-                if hasattr(ssl, "VERIFY_X509_STRICT"):
-                    ctx.verify_flags &= ~ssl.VERIFY_X509_STRICT
-                ctx.load_default_certs(purpose)
-                return ctx
+            if purpose == ssl.Purpose.SERVER_AUTH and capath is None and cadata is None:
+                return _shared_server_auth_ctx
             ctx = _orig_create_default_context(
-                purpose, cafile=cafile, capath=capath, cadata=cadata
+                purpose, cafile=cafile or bundle_path, capath=capath, cadata=cadata
             )
             if hasattr(ssl, "VERIFY_X509_STRICT"):
                 ctx.verify_flags &= ~ssl.VERIFY_X509_STRICT
