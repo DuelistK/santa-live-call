@@ -221,6 +221,7 @@ def build_santa_system_prompt(note: SecretSantaNote) -> str:
    - 중후하고 따뜻하며 인자한 할아버지 말투를 일정한 속도로 차분하게 유지하세요.
    - 웃음소리는 "허허허," 또는 "호호호,"처럼 쉼표와 함께 자연스럽게 섞어 쓰되, 목소리 톤이 얇아지거나 여자/젊은이 목소리로 튀지 않도록 **물결표(~)나 과도한 느낌표(!!)를 절대 사용하지 마세요.**
    - 문장 끝은 가급적 마침표(.)나 물음표(?)로 차분하게 마무리하고, **한 번에 반드시 1~2문장(최대 65자 이내)**으로 짧고 또렷하게 말한 뒤 아이의 대답을 기다리세요.
+   - 숫자와 단위는 아라비아 숫자 대신 자연스러운 한글 발음(예: "여섯 살", "세 번", "열두 시")으로 적어서 음성 합성 지연을 줄이세요.
 2. 동적 정보 활용:
    - 북극의 '착한 어린이 마법 수첩'에서 봤다면서 '{note.praise}'에 대해 구체적으로 칭찬해 주세요.
    - 대화 중 자연스럽게 '{note.mission}' 약속을 잘 지킬 수 있는지 손가락 걸고 약속을 받아내세요.
@@ -596,7 +597,8 @@ async def entrypoint(ctx: JobContext) -> None:
         stt_engine = deepgram.STT(
             model="nova-2",
             language="ko",
-            smart_format=True,
+            smart_format=False,
+            no_delay=True,
             keywords=boost_terms,
             api_key=os.getenv("DEEPGRAM_API_KEY"),
         )
@@ -604,20 +606,26 @@ async def entrypoint(ctx: JobContext) -> None:
         stt_engine = deepgram.STT(
             model="nova-2",
             language="ko",
-            smart_format=True,
+            smart_format=False,
             api_key=os.getenv("DEEPGRAM_API_KEY"),
         )
 
-    # - LLM: Google Gemini Flash (신규 API 키에서 즉시 응답하는 gemini-3.5-flash-lite 기본 사용)
+    # - LLM: Google Gemini Flash (최소 추론 thinking_level=MINIMAL + max_output_tokens=120으로 TTFT 최소화)
     gemini_model = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite").strip()
-    llm_engine = google.LLM(
-        model=gemini_model,
-        temperature=0.7,
-        api_key=os.getenv("GOOGLE_API_KEY"),
-    )
+    llm_kwargs: dict[str, Any] = {
+        "model": gemini_model,
+        "temperature": 0.7,
+        "max_output_tokens": 120,
+        "api_key": os.getenv("GOOGLE_API_KEY"),
+    }
+    if "2.5" in gemini_model:
+        llm_kwargs["thinking_config"] = {"thinking_budget": 0}
+    elif "3.5" in gemini_model:
+        llm_kwargs["thinking_config"] = {"thinking_level": "MINIMAL"}
+    llm_engine = google.LLM(**llm_kwargs)
 
-    # - TTS: ElevenLabs 인자한 할아버지 목소리 고정 & 초반 말 빨라짐(버스트)/성별 변화 방지 설정
-    # (auto_mode=False 및 streaming_latency 제거로 첫 음절 마이크로 청크 급발진을 막고 일정한 호흡으로 발화합니다.)
+    # - TTS: ElevenLabs 초저지연 Flash 모델(eleven_flash_v2_5) + auto_mode=False & 청크 스케줄 튜닝
+    # (목소리 톤 안정성과 급발진 방지를 유지하면서 첫 음성 송출 지연만 단축합니다.)
     eleven_api_key = os.getenv("ELEVENLABS_API_KEY") or os.getenv("ELEVEN_API_KEY")
     raw_voice_id = os.getenv("ELEVENLABS_VOICE_ID", "").strip()
     voice_id = (
@@ -628,7 +636,7 @@ async def entrypoint(ctx: JobContext) -> None:
     tts_engine = elevenlabs.TTS(
         api_key=eleven_api_key,
         voice_id=voice_id,
-        model="eleven_turbo_v2_5",
+        model="eleven_flash_v2_5",
         language="ko",
         voice_settings=elevenlabs.VoiceSettings(
             stability=0.86,
@@ -638,11 +646,12 @@ async def entrypoint(ctx: JobContext) -> None:
             use_speaker_boost=True,
         ),
         auto_mode=False,
-        apply_text_normalization="on",
+        chunk_length_schedule=[50, 90, 140, 200],
+        apply_text_normalization="off",
     )
 
-    # 한국어 STT(Deepgram) 최종 전사 지연(0.33~0.44초)보다 min_endpointing_delay(0.55초)를 여유 있게 설정하여
-    # 아이의 한 문장이 두 턴으로 쪼개져 산타가 두 번 연속 급하게 대답하는 현상을 원천 방지합니다.
+    # 한국어 STT(Deepgram) 최종 전사 지연(0.30~0.44초)보다 min_endpointing_delay(0.55초)를 여유 있게 유지하되,
+    # preemptive_generation=True로 0.55초 대기 구간 동안 LLM 답변을 선제 생성하여 체감 지연을 단축합니다.
     try:
         vad_engine = silero.VAD.load(min_silence_duration=0.50, min_speech_duration=0.15)
     except TypeError:
@@ -653,7 +662,7 @@ async def entrypoint(ctx: JobContext) -> None:
         stt=stt_engine,
         llm=llm_engine,
         tts=tts_engine,
-        preemptive_generation=False,
+        preemptive_generation=True,
         min_endpointing_delay=0.55,
         max_endpointing_delay=1.10,
         min_interruption_duration=0.65,
