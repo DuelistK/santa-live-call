@@ -232,6 +232,8 @@ def build_santa_system_prompt(note: SecretSantaNote) -> str:
    - 아이가 부끄러워하거나 말이 없으면 "허허허, 우리 {note.childName}이가 산타할아버지를 보니까 조금 부끄러운가 보구나. 할아버지 수염이 하얘서 신기하지?"라며 다정하게 긴장을 풀어주세요.
 5. 초저지연 즉시 응답 규칙:
    - 응답 지연을 막기 위해 통화 중에는 별도의 도구(function tool)를 호출하지 말고 **즉시 음성 대사 텍스트만 생성**하세요(선물 기록과 마법 연출은 백그라운드 시스템이 자동으로 처리합니다).
+6. 작별 인사 및 통화 종료 규칙:
+   - 아이가 "안녕히 계세요", "다음에 만나요", "빠이빠이", "끊을게요", "끊어주세요" 등 작별 인사를 건네거나 통화 종료를 원하면, 추가 질문을 절대 하지 말고 "호호호, 우리 {note.childName} 어린이 다음에 또 만나자꾸나. 메리 크리스마스."처럼 1문장으로 따뜻하게 마무리 인사를 건네세요.
 """
 
 
@@ -382,7 +384,6 @@ class SantaClausAgent(Agent):
             santaComment=f"올해 '{note.praise}' 모습을 보여준 {note.childName}, 정말 기특하구나! 호호호!",
         )
 
-    @function_tool
     async def record_child_gift_wish(
         self,
         context: RunContext,
@@ -466,6 +467,20 @@ class SantaClausAgent(Agent):
             logger.info("Published updated Santa report to frontend: %s", self.report.detectedGifts)
         except Exception as exc:
             logger.warning("Could not publish Santa report data packet: %s", exc)
+
+    async def publish_end_call(self, reason: str = "farewell") -> None:
+        """LiveKit DataChannel ('santa-end-call' 토픽)을 통해 프론트엔드에 통화 자동 종료 신호를 전송합니다."""
+        try:
+            await self.publish_report_to_frontend()
+            payload_bytes = json.dumps({"reason": reason}, ensure_ascii=False).encode("utf-8")
+            await self.room.local_participant.publish_data(
+                payload_bytes,
+                reliable=True,
+                topic="santa-end-call",
+            )
+            logger.info("Published santa-end-call to frontend (reason=%s)", reason)
+        except Exception as exc:
+            logger.warning("Could not publish santa-end-call packet: %s", exc)
 
 
 # =====================================================================
@@ -601,9 +616,8 @@ async def entrypoint(ctx: JobContext) -> None:
         api_key=os.getenv("GOOGLE_API_KEY"),
     )
 
-    # - TTS: ElevenLabs 인자한 할아버지 목소리 고정 & 속도 급발진/성별 변화 방지 설정
-    # (stability/similarity_boost를 높이고 style=0.0, speed=0.92, auto_mode=True로 고정하여
-    #  젊은 남성이나 여성 목소리로 튀거나 문장 중간에 말이 급격히 빨라지는 현상을 원천 차단합니다.)
+    # - TTS: ElevenLabs 인자한 할아버지 목소리 고정 & 초반 말 빨라짐(버스트)/성별 변화 방지 설정
+    # (auto_mode=False 및 streaming_latency 제거로 첫 음절 마이크로 청크 급발진을 막고 일정한 호흡으로 발화합니다.)
     eleven_api_key = os.getenv("ELEVENLABS_API_KEY") or os.getenv("ELEVEN_API_KEY")
     raw_voice_id = os.getenv("ELEVENLABS_VOICE_ID", "").strip()
     voice_id = (
@@ -617,20 +631,20 @@ async def entrypoint(ctx: JobContext) -> None:
         model="eleven_turbo_v2_5",
         language="ko",
         voice_settings=elevenlabs.VoiceSettings(
-            stability=0.85,
+            stability=0.86,
             similarity_boost=0.88,
             style=0.0,
-            speed=0.92,
+            speed=0.90,
             use_speaker_boost=True,
         ),
-        auto_mode=True,
-        streaming_latency=2,
+        auto_mode=False,
         apply_text_normalization="on",
     )
 
-    # 아이의 발화 후 응답 지연(기존 2.5~3.2초 대기)을 대폭 줄이기 위해 VAD 침묵 감지 및 엔드포인팅 지연 최적화
+    # 한국어 STT(Deepgram) 최종 전사 지연(0.33~0.44초)보다 min_endpointing_delay(0.55초)를 여유 있게 설정하여
+    # 아이의 한 문장이 두 턴으로 쪼개져 산타가 두 번 연속 급하게 대답하는 현상을 원천 방지합니다.
     try:
-        vad_engine = silero.VAD.load(min_silence_duration=0.40, min_speech_duration=0.15)
+        vad_engine = silero.VAD.load(min_silence_duration=0.50, min_speech_duration=0.15)
     except TypeError:
         vad_engine = silero.VAD.load()
 
@@ -640,21 +654,52 @@ async def entrypoint(ctx: JobContext) -> None:
         llm=llm_engine,
         tts=tts_engine,
         preemptive_generation=False,
-        min_endpointing_delay=0.25,
-        max_endpointing_delay=0.80,
+        min_endpointing_delay=0.55,
+        max_endpointing_delay=1.10,
         min_interruption_duration=0.65,
         min_interruption_words=2,
     )
 
     santa_agent = SantaClausAgent(note=note, room=ctx.room)
-    last_child_activity = asyncio.get_event_loop().time()
+    last_activity_ts = asyncio.get_event_loop().time()
     last_magic_fx_time = 0.0
+    child_turn_count = 0
     nudge_sent = False
+    farewell_requested = False
+    hangup_sent = False
+
+    farewell_keywords = (
+        "안녕히 계세요",
+        "안녕히 가세요",
+        "안녕히계세요",
+        "안녕히가세요",
+        "다음에 만나",
+        "다음에 또 만나",
+        "나중에 만나",
+        "또 만나요",
+        "끊을게",
+        "끊어주",
+        "끊어 주",
+        "먼저 끊",
+        "통화 종료",
+        "빠이빠이",
+        "바이바이",
+        "잘 가요",
+        "잘가요",
+    )
+
+    async def _trigger_graceful_hangup(delay_sec: float = 1.4, reason: str = "farewell") -> None:
+        nonlocal hangup_sent
+        await asyncio.sleep(delay_sec)
+        if hangup_sent:
+            return
+        hangup_sent = True
+        await santa_agent.publish_end_call(reason=reason)
 
     # 사용자/산타 대화가 추가될 때마다 프론트엔드 실시간 자막 및 대화록('santa-transcript' 토픽)으로 즉시 전송
     @session.on("conversation_item_added")
     def _on_conversation_item_added(event: Any) -> None:
-        nonlocal last_child_activity, last_magic_fx_time
+        nonlocal last_activity_ts, last_magic_fx_time, child_turn_count, farewell_requested
         try:
             item = getattr(event, "item", None)
             if not item:
@@ -673,11 +718,31 @@ async def entrypoint(ctx: JobContext) -> None:
 
             speaker = "santa" if role == "assistant" else "child"
             now_ts = asyncio.get_event_loop().time()
+            last_activity_ts = now_ts
+
             if speaker == "child":
-                last_child_activity = now_ts
+                child_turn_count += 1
+                if any(kw in text_str for kw in farewell_keywords):
+                    logger.info("Farewell detected from child transcript: %s", text_str)
+                    farewell_requested = True
+                    asyncio.create_task(_trigger_graceful_hangup(delay_sec=8.5, reason="farewell_timeout"))
             else:
+                # 산타의 마무리 인사(작별 요청 직후의 답변이거나, 대화 후반부 명확한 작별 멘트)가 끝났을 때 자동 통화 종료
+                is_santa_closing = (
+                    child_turn_count >= 1
+                    and "?" not in text_str
+                    and (
+                        ("메리 크리스마스" in text_str and any(k in text_str for k in ("또 만나", "안녕", "끊어야", "썰매 점검")))
+                        or any(k in text_str for k in ("전화를 끊어야", "다음에 또 만나자꾸나. 안녕", "안녕히 계세요"))
+                    )
+                )
+                if farewell_requested or is_santa_closing:
+                    farewell_requested = True
+                    logger.info("Santa finished farewell speech; scheduling automatic call hangup in 1.4s.")
+                    asyncio.create_task(_trigger_graceful_hangup(delay_sec=1.4, reason="farewell_completed"))
+
                 # 산타 대사 중 핵심 이벤트가 있을 때만(최소 10초 간격 쿨다운 적용) 좌측 상단 소형 알림 표시
-                if (now_ts - last_magic_fx_time) >= 10.0:
+                if (now_ts - last_magic_fx_time) >= 10.0 and not farewell_requested:
                     if any(k in text_str for k in ("루돌프", "썰매")):
                         last_magic_fx_time = now_ts
                         asyncio.create_task(
@@ -705,21 +770,24 @@ async def entrypoint(ctx: JobContext) -> None:
         except Exception as exc:
             logger.debug("Could not publish santa-transcript packet: %s", exc)
 
-    # 사용자 발화 시 백그라운드 선물 키워드 추출 연결
+    # 사용자 발화 시 백그라운드 선물 키워드 추출 및 작별 의사 감지 연결
     @session.on("user_input_transcribed")
     def _on_user_transcribed(event: Any) -> None:
-        nonlocal last_child_activity
+        nonlocal last_activity_ts, farewell_requested
         transcript = getattr(event, "transcript", "")
         is_final = getattr(event, "is_final", True)
         if transcript:
-            last_child_activity = asyncio.get_event_loop().time()
+            last_activity_ts = asyncio.get_event_loop().time()
         if is_final and transcript:
+            if any(kw in transcript for kw in farewell_keywords):
+                farewell_requested = True
+                asyncio.create_task(_trigger_graceful_hangup(delay_sec=8.5, reason="farewell_timeout"))
             asyncio.create_task(extract_gift_keywords_in_background(transcript, santa_agent))
 
     # 프론트엔드 DataChannel 메시지('child-chat', 'parent-whisper', 'santa-vision-speak') 수신 연동
     @ctx.room.on("data_received")
     def _on_data_received(data_packet: rtc.DataPacket) -> None:
-        nonlocal last_child_activity
+        nonlocal last_activity_ts, child_turn_count, farewell_requested
         try:
             topic = data_packet.topic
             text = data_packet.data.decode("utf-8").strip()
@@ -727,8 +795,12 @@ async def entrypoint(ctx: JobContext) -> None:
                 return
 
             if topic == "child-chat":
-                last_child_activity = asyncio.get_event_loop().time()
+                last_activity_ts = asyncio.get_event_loop().time()
+                child_turn_count += 1
                 logger.info("Received child-chat message from frontend: %s", text)
+                if any(kw in text for kw in farewell_keywords):
+                    farewell_requested = True
+                    asyncio.create_task(_trigger_graceful_hangup(delay_sec=8.5, reason="farewell_timeout"))
                 asyncio.create_task(extract_gift_keywords_in_background(text, santa_agent))
                 session.generate_reply(
                     user_input=text,
@@ -758,67 +830,84 @@ async def entrypoint(ctx: JobContext) -> None:
         try:
             await avatar.start(session, room=ctx.room)
             logger.info("Real-time Santa avatar session started successfully.")
+            # 아바타 비디오 트랙이 실제로 퍼블리시되어 오디오 스트림 수신 준비가 끝날 때까지 대기 (초반 음성 버스트/밀림 방지)
+            for _ in range(36):
+                has_avatar_video = any(
+                    pub.kind == rtc.TrackKind.KIND_VIDEO
+                    for p in ctx.room.remote_participants.values()
+                    for pub in p.track_publications.values()
+                )
+                if has_avatar_video:
+                    break
+                await asyncio.sleep(0.1)
+            await asyncio.sleep(0.45)
         except Exception as exc:
             logger.error("Avatar session failed to start; continuing with voice session: %s", exc)
 
     # 초기 리포트 상태 프론트엔드 동기화
     await santa_agent.publish_report_to_frontend()
 
-    # 5. 통화 연결 직후 산타가 먼저 반갑게 첫인사 (칭찬 도장 5개 달성 / 재통화 기억 / 첫 통화 분기)
+    # 5. 통화 연결 직후 산타가 먼저 반갑게 첫인사 (느낌표 남발 없이 차분하고 일정한 속도로 1~2문장 발화)
     is_generic_name = note.childName in ("착한 어린이", "우리 아이", "아이", "")
     if is_generic_name:
         opening_instructions = (
-            "방금 영상 통화가 연결되었습니다! "
-            "'호호호! 안녕! 북극 산타 마을에서 산타할아버지가 전화했단다!'라고 반갑게 인사한 뒤, "
-            "'할아버지가 마법 수첩에서 찾으려는데, 우리 멋진 친구 이름이 무엇이니?'라고 "
-            "1~2문장으로 다정하게 물어보세요. 이후 아이가 이름을 말하면 그 이름을 계속 불러주세요."
+            "방금 영상 통화가 연결되었습니다. "
+            "'호호호, 안녕, 북극 산타 마을에서 산타할아버지가 전화했단다.'라고 차분하고 인자하게 인사한 뒤, "
+            "'우리 멋진 친구 이름이 무엇인지 할아버지에게 알려줄래?'라고 "
+            "1~2문장으로 다정하게 물어보세요."
         )
     elif note.stampsCollected >= 5:
         opening_instructions = (
-            f"방금 영상 통화가 연결되었습니다! "
-            f"'{note.childName}' 어린이가 약속 도장 5개를 모두 모았다는 소식이 북극에 도착했습니다! "
-            f"'호호호! 우리 {note.childName} 어린이! 약속 별 도장 다섯 개를 전부 모았다고 요정들이 알려줬단다! 정말 대단하구나!'라며 "
-            f"1~2문장으로 신나게 축하 인사를 건네세요."
+            f"방금 영상 통화가 연결되었습니다. "
+            f"'호호호, 우리 {note.childName} 어린이, 약속 별 도장 다섯 개를 전부 모았다고 요정들이 알려줬단다. 정말 기특하구나.'라며 "
+            f"1~2문장으로 차분하고 따뜻하게 축하 인사를 건네세요."
         )
     elif note.previousCallCount >= 1:
         opening_instructions = (
-            f"방금 '{note.childName}' 어린이와 다시 영상 통화가 연결되었습니다(이전 {note.previousCallCount}회 통화)! "
-            f"'호호호! 우리 {note.childName} 어린이, 또 만나서 반갑구나! 지난번에 할아버지랑 약속했던 {note.lastPromise or note.mission} 잘 지켰니?'라고 "
-            f"기억하고 있다는 듯이 1~2문장으로 다정하게 첫인사를 건네세요."
+            f"방금 '{note.childName}' 어린이와 다시 영상 통화가 연결되었습니다. "
+            f"'호호호, 우리 {note.childName} 어린이, 또 만나서 반갑구나. 지난번에 할아버지랑 약속했던 {note.lastPromise or note.mission} 잘 지키고 있니?'라고 "
+            f"1~2문장으로 차분하고 다정하게 첫인사를 건네세요."
         )
     else:
         opening_instructions = (
-            f"방금 영상 통화가 연결되었습니다! "
-            f"'호호호! 우리 {note.childName} 어린이, 안녕! 북극 산타 마을에서 산타할아버지가 전화했단다!'라고 "
-            f"아이의 이름({note.childName})을 다정하게 부르며 시작하고, "
-            f"올해 '{note.praise}' 한 모습을 마법 수첩에서 봤다고 1~2문장으로 따뜻하게 첫인사를 건네세요."
+            f"방금 영상 통화가 연결되었습니다. "
+            f"'호호호, 우리 {note.childName} 어린이 안녕, 북극 산타 마을에서 산타할아버지가 전화했단다.'라고 "
+            f"차분하게 시작하고, 올해 '{note.praise}' 한 모습을 마법 수첩에서 봤다고 1~2문장으로 따뜻하게 첫인사를 건네세요."
         )
 
     await session.generate_reply(instructions=opening_instructions)
-    last_child_activity = asyncio.get_event_loop().time()
+    last_activity_ts = asyncio.get_event_loop().time()
 
-    # 6. 침묵 넛지(16초 무응답 시 1회 긴장 완화) & 루돌프 썰매 점검 알림(150초 도달 시 비용 보호 자연 마무리)
+    # 6. 침묵 넛지(아이가 한 번도 말을 안 한 상태에서 산타 첫인사 완료 후 18초 무응답 시 1회) & 150초 자연 마무리
     async def _call_lifecycle_guardian() -> None:
-        nonlocal nudge_sent
+        nonlocal nudge_sent, farewell_requested
         call_started = asyncio.get_event_loop().time()
         wrapup_sent = False
         try:
             while ctx.room.connection_state == rtc.ConnectionState.CONN_CONNECTED:
                 await asyncio.sleep(3.0)
+                if farewell_requested or hangup_sent:
+                    break
                 now = asyncio.get_event_loop().time()
 
-                if not nudge_sent and (now - last_child_activity) >= 16.0 and (now - call_started) < 60.0:
+                if (
+                    not nudge_sent
+                    and child_turn_count == 0
+                    and (now - last_activity_ts) >= 18.0
+                    and (now - call_started) < 65.0
+                ):
                     nudge_sent = True
                     session.generate_reply(
                         instructions=(
                             f"아이가 부끄러워서 아직 말을 못 하고 있습니다. "
-                            f"'호호호, 산타할아버지 흰 수염이 신기해서 보고 있구나? 고개만 끄덕여도 할아버지는 다 보인단다!'라고 "
-                            f"1문장으로 다정하게 긴장을 풀어주세요."
+                            f"'호호호, 산타할아버지 흰 수염이 신기해서 보고 있구나. 고개만 끄덕여도 할아버지는 다 보인단다.'라고 "
+                            f"1문장으로 차분하고 다정하게 긴장을 풀어주세요."
                         )
                     )
 
-                if not wrapup_sent and (now - call_started) >= 150.0:
+                if not wrapup_sent and not farewell_requested and (now - call_started) >= 150.0:
                     wrapup_sent = True
+                    farewell_requested = True
                     fx_packet = json.dumps(
                         {"effect": "sleigh_bell", "message": "요정들이 루돌프 썰매 점검 종을 울렸어요 🔔"},
                         ensure_ascii=False,
@@ -829,10 +918,11 @@ async def entrypoint(ctx: JobContext) -> None:
                     session.generate_reply(
                         instructions=(
                             f"이제 통화를 따뜻하게 마무리할 시간입니다. "
-                            f"'앗, 요정 친구들이 루돌프 썰매 점검 시간이라고 종을 울리는구나! 우리 {note.childName}, 약속 꼭 지키고 크리스마스에 또 만나자! 메리 크리스마스!'라고 "
-                            f"다정하게 작별 인사를 건네세요."
+                            f"'앗, 요정 친구들이 루돌프 썰매 점검 시간이라고 종을 울리는구나. 우리 {note.childName}, 약속 꼭 지키고 크리스마스에 또 만나자. 메리 크리스마스.'라고 "
+                            f"1~2문장으로 다정하게 작별 인사를 건네세요."
                         )
                     )
+                    asyncio.create_task(_trigger_graceful_hangup(delay_sec=9.0, reason="wrapup_timeout"))
                     break
         except asyncio.CancelledError:
             pass

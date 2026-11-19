@@ -299,6 +299,7 @@ function LiveKitActiveStage({
   onRemoteReport,
   onRemoteTranscript,
   onRemoteMagicFx,
+  onRemoteEndCall,
   onProvideChatSender,
   micEnabled,
 }: {
@@ -306,6 +307,7 @@ function LiveKitActiveStage({
   onRemoteReport: (payload: Record<string, unknown>) => void;
   onRemoteTranscript: (speaker: "santa" | "child", text: string) => void;
   onRemoteMagicFx: (effect: SantaMagicEffectType, message: string) => void;
+  onRemoteEndCall: () => void;
   onProvideChatSender: (sender: ((text: string) => void) | null) => void;
   micEnabled: boolean;
 }) {
@@ -382,6 +384,11 @@ function LiveKitActiveStage({
     }
   });
 
+  // 백엔드 산타 AI 마무리 인사 완료 후 자동 통화 종료 신호('santa-end-call' 토픽) 수신
+  useDataChannel("santa-end-call", () => {
+    onRemoteEndCall();
+  });
+
   if (!remoteAvatarTrack) {
     return null;
   }
@@ -425,7 +432,7 @@ export default function CallPage() {
   const [camPermissionWarning, setCamPermissionWarning] = useState(false);
 
   const [elapsedSec, setElapsedSec] = useState(0);
-  const [santaSpeaking, setSantaSpeaking] = useState(true);
+  const [santaSpeaking, setSantaSpeaking] = useState(false);
   const [childInputText, setChildInputText] = useState("");
   const [detectedGifts, setDetectedGifts] = useState<string[]>(
     note.giftHint && note.giftHint !== "크리스마스 깜짝 선물" ? [note.giftHint] : []
@@ -443,6 +450,8 @@ export default function CallPage() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
   const magicTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const farewellPendingRef = useRef(false);
+  const endCallFnRef = useRef<() => void>(() => {});
 
   // 캔버스 렌더링 루프에서 최신 상태를 참조하기 위한 Ref
   const latestStateRef = useRef({
@@ -978,17 +987,17 @@ export default function CallPage() {
             }
             const avgEnergy = sum / dataArr.length;
             const now = Date.now();
-            if (avgEnergy > 8) {
+            if (avgEnergy > 5) {
               lastVoiceActiveAt = now;
               setSantaSpeaking(true);
-            } else if (lastVoiceActiveAt > 0 && now - lastVoiceActiveAt > 450) {
+            } else if (lastVoiceActiveAt > 0 && now - lastVoiceActiveAt > 850) {
               setSantaSpeaking(false);
             }
           }
         };
 
         attachRemoteAudioElements();
-        audioScanInterval = setInterval(attachRemoteAudioElements, 140);
+        audioScanInterval = setInterval(attachRemoteAudioElements, 120);
 
         dest.stream.getAudioTracks().forEach((t) => combinedTracks.push(t));
       }
@@ -1065,13 +1074,58 @@ export default function CallPage() {
           timestamp: formatTime(currentElapsed),
         },
       ]);
-      if (speaker === "santa") {
-        setSantaSpeaking(true);
-        setTimeout(() => setSantaSpeaking(false), 3200);
+
+      const farewellKeywords = [
+        "안녕히 계세요",
+        "안녕히 가세요",
+        "안녕히계세요",
+        "안녕히가세요",
+        "다음에 만나",
+        "다음에 또 만나",
+        "나중에 만나",
+        "또 만나요",
+        "끊을게",
+        "끊어주",
+        "끊어 주",
+        "먼저 끊",
+        "빠이빠이",
+        "바이바이",
+        "잘 가요",
+        "잘가요",
+      ];
+
+      if (speaker === "child") {
+        if (farewellKeywords.some((kw) => text.includes(kw))) {
+          farewellPendingRef.current = true;
+        }
+      } else {
+        // LiveKit에서 assistant의 conversation_item_added는 발화 재생 완료 시점에 도착하므로
+        // 여기서 setSantaSpeaking(true) + 타이머를 걸면 루프 영상이 중간에 튀는 원인이 됩니다.
+        // 작별 인사가 완료된 경우 부드럽게 통화를 자동 종료합니다.
+        const isClosingSantaLine =
+          !text.includes("?") &&
+          ((text.includes("메리 크리스마스") &&
+            (text.includes("또 만나") ||
+              text.includes("안녕") ||
+              text.includes("끊어야") ||
+              text.includes("썰매 점검"))) ||
+            text.includes("전화를 끊어야") ||
+            text.includes("안녕히 계세요"));
+
+        if (farewellPendingRef.current || isClosingSantaLine) {
+          farewellPendingRef.current = false;
+          setTimeout(() => {
+            endCallFnRef.current();
+          }, 1500);
+        }
       }
     },
     [avatarMode]
   );
+
+  const handleRemoteEndCall = useCallback(() => {
+    endCallFnRef.current();
+  }, []);
 
   // 선택형 대화 칩 또는 키보드 입력 전송
   const handleSendChildUtterance = (textToSend?: string) => {
@@ -1159,7 +1213,7 @@ export default function CallPage() {
     };
 
     const recorder = mediaRecorderRef.current;
-    if (recorder && recorder.state !== "inactive") {
+    if ( recorder && recorder.state !== "inactive") {
       recorder.onstop = () => {
         finalizeAndNavigate();
       };
@@ -1172,6 +1226,7 @@ export default function CallPage() {
       setTimeout(finalizeAndNavigate, 350);
     }
   };
+  endCallFnRef.current = handleEndCall;
 
   const quickChips = [
     displayName ? `안녕 산타할아버지! 저 ${displayName}예요!` : "안녕하세요 산타할아버지!",
@@ -1210,6 +1265,7 @@ export default function CallPage() {
             onRemoteReport={handleRemoteReport}
             onRemoteTranscript={handleRemoteTranscript}
             onRemoteMagicFx={triggerMagicEffect}
+            onRemoteEndCall={handleRemoteEndCall}
             onProvideChatSender={handleProvideChatSender}
             micEnabled={micEnabled && micPermissionState !== "denied"}
           />
@@ -1240,7 +1296,7 @@ export default function CallPage() {
           muted
           playsInline
           preload="auto"
-          className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${
+          className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-700 ease-in-out ${
             santaSpeaking ? "opacity-0" : "opacity-100"
           }`}
         />
@@ -1253,7 +1309,7 @@ export default function CallPage() {
           muted
           playsInline
           preload="auto"
-          className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${
+          className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-700 ease-in-out ${
             santaSpeaking ? "opacity-100" : "opacity-0"
           }`}
         />
