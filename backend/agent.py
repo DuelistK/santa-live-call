@@ -725,7 +725,7 @@ async def entrypoint(ctx: JobContext) -> None:
                 if any(kw in text_str for kw in farewell_keywords):
                     logger.info("Farewell detected from child transcript: %s", text_str)
                     farewell_requested = True
-                    asyncio.create_task(_trigger_graceful_hangup(delay_sec=8.5, reason="farewell_timeout"))
+                    asyncio.create_task(_trigger_graceful_hangup(delay_sec=15.0, reason="farewell_timeout"))
             else:
                 # 산타의 마무리 인사(작별 요청 직후의 답변이거나, 대화 후반부 명확한 작별 멘트)가 끝났을 때 자동 통화 종료
                 is_santa_closing = (
@@ -781,7 +781,7 @@ async def entrypoint(ctx: JobContext) -> None:
         if is_final and transcript:
             if any(kw in transcript for kw in farewell_keywords):
                 farewell_requested = True
-                asyncio.create_task(_trigger_graceful_hangup(delay_sec=8.5, reason="farewell_timeout"))
+                asyncio.create_task(_trigger_graceful_hangup(delay_sec=15.0, reason="farewell_timeout"))
             asyncio.create_task(extract_gift_keywords_in_background(transcript, santa_agent))
 
     # 프론트엔드 DataChannel 메시지('child-chat', 'parent-whisper', 'santa-vision-speak') 수신 연동
@@ -800,7 +800,7 @@ async def entrypoint(ctx: JobContext) -> None:
                 logger.info("Received child-chat message from frontend: %s", text)
                 if any(kw in text for kw in farewell_keywords):
                     farewell_requested = True
-                    asyncio.create_task(_trigger_graceful_hangup(delay_sec=8.5, reason="farewell_timeout"))
+                    asyncio.create_task(_trigger_graceful_hangup(delay_sec=15.0, reason="farewell_timeout"))
                 asyncio.create_task(extract_gift_keywords_in_background(text, santa_agent))
                 session.generate_reply(
                     user_input=text,
@@ -929,7 +929,7 @@ async def entrypoint(ctx: JobContext) -> None:
                             f"1~2문장으로 다정하게 작별 인사를 건네세요."
                         )
                     )
-                    asyncio.create_task(_trigger_graceful_hangup(delay_sec=9.0, reason="wrapup_timeout"))
+                    asyncio.create_task(_trigger_graceful_hangup(delay_sec=15.0, reason="wrapup_timeout"))
                     break
         except asyncio.CancelledError:
             pass

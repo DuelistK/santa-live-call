@@ -468,6 +468,7 @@ export default function CallPage() {
     displayName: "",
     activeMagic: null as SantaMagicEvent | null,
     camEnabled: true,
+    micEnabled: true,
   });
 
   const formatTime = (sec: number) => {
@@ -658,6 +659,7 @@ export default function CallPage() {
       displayName: displayName || "우리 아이",
       activeMagic,
       camEnabled,
+      micEnabled,
     };
   }, [
     elapsedSec,
@@ -668,6 +670,7 @@ export default function CallPage() {
     displayName,
     activeMagic,
     camEnabled,
+    micEnabled,
   ]);
 
   // ============================================================================
@@ -936,6 +939,7 @@ export default function CallPage() {
     // 캔버스 비디오 스트림 + 오디오 스트림(마이크 & LiveKit 원격 오디오) 결합
     let audioCtx: AudioContext | null = null;
     let audioScanInterval: ReturnType<typeof setInterval> | null = null;
+    let resumeAudioContext: (() => void) | null = null;
     const attachedElements = new WeakSet<HTMLAudioElement>();
 
     try {
@@ -948,6 +952,16 @@ export default function CallPage() {
 
       if (AudioCtx) {
         audioCtx = new AudioCtx();
+        // 모바일(iOS Safari / Android Chrome)에서 자동 suspended 방지: 즉시 resume 및 사용자 제스처 시 재시도
+        resumeAudioContext = () => {
+          if (audioCtx && audioCtx.state === "suspended") {
+            audioCtx.resume().catch(() => {});
+          }
+        };
+        resumeAudioContext();
+        window.addEventListener("pointerdown", resumeAudioContext, { passive: true });
+        window.addEventListener("touchstart", resumeAudioContext, { passive: true });
+
         const dest = audioCtx.createMediaStreamDestination();
 
         // 무음 오실레이터로 오디오 트랙 클럭 유지
@@ -960,6 +974,7 @@ export default function CallPage() {
 
         // 로컬 마이크 스트림 연결 + 아이 발화 에너지 감지용 AnalyserNode
         let micAnalyser: AnalyserNode | null = null;
+        let micFreqBuf: Uint8Array<ArrayBuffer> | null = null;
         if (micStreamRef.current && micStreamRef.current.getAudioTracks().length > 0) {
           try {
             const micSource = audioCtx.createMediaStreamSource(micStreamRef.current);
@@ -968,20 +983,31 @@ export default function CallPage() {
             micAnalyser.fftSize = 256;
             micAnalyser.smoothingTimeConstant = 0.5;
             micSource.connect(micAnalyser);
+            micFreqBuf = new Uint8Array(micAnalyser.frequencyBinCount);
           } catch {
             // ignore
           }
         }
 
-        // LiveKit RoomAudioRenderer가 생성한 원격 <audio> 엘리먼트 스트림 자동 연결 + 음절 단위(60ms) 실시간 파형/박자 동기화
-        let remoteAnalyser: AnalyserNode | null = null;
+        // 모든 원격 <audio> 엘리먼트가 공유하는 단일 AnalyserNode 생성 (트랙 재생성/추가 시에도 파형 누락 방지)
+        const remoteAnalyser = audioCtx.createAnalyser();
+        remoteAnalyser.fftSize = 256;
+        remoteAnalyser.smoothingTimeConstant = 0.4;
+        const remoteFreqBuf = new Uint8Array(remoteAnalyser.frequencyBinCount);
+
         let lastVoiceActiveAt = 0;
         let lastLaughActiveAt = 0;
         let lastChildVoiceAt = 0;
+        let prevSpeaking = latestStateRef.current.santaSpeaking;
+        let prevMotionState = latestStateRef.current.santaMotionState;
 
         const attachRemoteAudioElements = () => {
           const activeAudioCtx = audioCtx;
           if (!activeAudioCtx) return;
+          if (activeAudioCtx.state === "suspended") {
+            activeAudioCtx.resume().catch(() => {});
+          }
+
           const audioEls = document.querySelectorAll("audio");
           audioEls.forEach((el) => {
             if (attachedElements.has(el)) return;
@@ -990,12 +1016,7 @@ export default function CallPage() {
               try {
                 const remoteSource = activeAudioCtx.createMediaStreamSource(mediaStream);
                 remoteSource.connect(dest);
-                if (!remoteAnalyser) {
-                  remoteAnalyser = activeAudioCtx.createAnalyser();
-                  remoteAnalyser.fftSize = 256;
-                  remoteAnalyser.smoothingTimeConstant = 0.4;
-                  remoteSource.connect(remoteAnalyser);
-                }
+                remoteSource.connect(remoteAnalyser);
                 attachedElements.add(el);
               } catch {
                 // ignore
@@ -1004,31 +1025,29 @@ export default function CallPage() {
           });
 
           const now = Date.now();
-          let santaEnergy = 0;
-          if (remoteAnalyser) {
-            const dataArr = new Uint8Array(remoteAnalyser.frequencyBinCount);
-            remoteAnalyser.getByteFrequencyData(dataArr);
-            let sum = 0;
-            for (let i = 0; i < dataArr.length; i += 1) {
-              sum += dataArr[i];
-            }
-            santaEnergy = sum / dataArr.length;
+          remoteAnalyser.getByteFrequencyData(remoteFreqBuf);
+          let sum = 0;
+          for (let i = 0; i < remoteFreqBuf.length; i += 1) {
+            sum += remoteFreqBuf[i];
           }
+          const santaEnergy = sum / remoteFreqBuf.length;
 
           let childEnergy = 0;
-          if (micAnalyser && micEnabled) {
-            const micArr = new Uint8Array(micAnalyser.frequencyBinCount);
-            micAnalyser.getByteFrequencyData(micArr);
+          if (micAnalyser && micFreqBuf && latestStateRef.current.micEnabled) {
+            micAnalyser.getByteFrequencyData(micFreqBuf);
             let micSum = 0;
-            for (let i = 0; i < micArr.length; i += 1) {
-              micSum += micArr[i];
+            for (let i = 0; i < micFreqBuf.length; i += 1) {
+              micSum += micFreqBuf[i];
             }
-            childEnergy = micSum / micArr.length;
+            childEnergy = micSum / micFreqBuf.length;
           }
+
+          let nextSpeaking = prevSpeaking;
+          let nextMotionState = prevMotionState;
 
           if (santaEnergy > 5.5) {
             lastVoiceActiveAt = now;
-            setSantaSpeaking(true);
+            nextSpeaking = true;
 
             // 음절 에너지 크기에 비례하여 발화 비디오 재생 속도(0.78x ~ 1.28x)를 실시간 조절해 입/수염 박자감 동기화
             const dynamicRate = Math.min(1.28, Math.max(0.78, 0.76 + (santaEnergy / 38) * 0.48));
@@ -1041,23 +1060,33 @@ export default function CallPage() {
 
             if (santaEnergy > 23) {
               lastLaughActiveAt = now;
-              setSantaMotionState("laughing");
+              nextMotionState = "laughing";
             } else if (now - lastLaughActiveAt < 550) {
-              setSantaMotionState("laughing");
+              nextMotionState = "laughing";
             } else {
-              setSantaMotionState("talking");
+              nextMotionState = "talking";
             }
           } else if (now - lastVoiceActiveAt > 150) {
             // 문장 사이 쉼표나 말이 멈추면 0.15초 만에 즉시 입을 다물어(listening/nodding) 립싱크 어색함 제거
-            setSantaSpeaking(false);
-            if (childEnergy > 7.5) {
+            nextSpeaking = false;
+            // 산타 스피커 잔향(에코)으로 인한 오인식을 막기 위해 발화 종료 0.3초 이후 + 임계값 12 이상일 때만 끄덕임 반응
+            if (now - lastVoiceActiveAt > 300 && childEnergy > 12) {
               lastChildVoiceAt = now;
-              setSantaMotionState("nodding");
+              nextMotionState = "nodding";
             } else if (now - lastChildVoiceAt < 850) {
-              setSantaMotionState("nodding");
+              nextMotionState = "nodding";
             } else {
-              setSantaMotionState("listening");
+              nextMotionState = "listening";
             }
+          }
+
+          if (nextSpeaking !== prevSpeaking) {
+            prevSpeaking = nextSpeaking;
+            setSantaSpeaking(nextSpeaking);
+          }
+          if (nextMotionState !== prevMotionState) {
+            prevMotionState = nextMotionState;
+            setSantaMotionState(nextMotionState);
           }
         };
 
@@ -1098,6 +1127,10 @@ export default function CallPage() {
     return () => {
       clearInterval(drawInterval);
       if (audioScanInterval) clearInterval(audioScanInterval);
+      if (resumeAudioContext) {
+        window.removeEventListener("pointerdown", resumeAudioContext);
+        window.removeEventListener("touchstart", resumeAudioContext);
+      }
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
         try {
           mediaRecorderRef.current.stop();
@@ -1229,7 +1262,11 @@ export default function CallPage() {
     }
 
     setSantaSpeaking(true);
-    setTimeout(() => setSantaSpeaking(false), 3000);
+    setSantaMotionState("talking");
+    setTimeout(() => {
+      setSantaSpeaking(false);
+      setSantaMotionState("listening");
+    }, 3000);
 
     setTranscript((prev) => [
       ...prev,
@@ -1266,7 +1303,10 @@ export default function CallPage() {
     setReport(finalReport);
     appendReportToHistory(finalReport);
 
+    let navigated = false;
     const finalizeAndNavigate = () => {
+      if (navigated) return;
+      navigated = true;
       if (recordedChunksRef.current.length > 0) {
         const mimeType = mediaRecorderRef.current?.mimeType || "video/webm";
         const ext = mimeType.includes("mp4") ? "mp4" : "webm";
@@ -1279,12 +1319,16 @@ export default function CallPage() {
 
     const recorder = mediaRecorderRef.current;
     if ( recorder && recorder.state !== "inactive") {
+      // onstop 이벤트가 지연되거나 누락되어도 1.2초 후 안전하게 리포트로 이동
+      const safetyTimer = setTimeout(finalizeAndNavigate, 1200);
       recorder.onstop = () => {
+        clearTimeout(safetyTimer);
         finalizeAndNavigate();
       };
       try {
         recorder.stop();
       } catch {
+        clearTimeout(safetyTimer);
         finalizeAndNavigate();
       }
     } else {
@@ -1363,9 +1407,7 @@ export default function CallPage() {
           muted
           playsInline
           preload="auto"
-          className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-200 ease-out ${
-            santaMotionState === "listening" ? "opacity-100" : "opacity-0"
-          }`}
+          className="absolute inset-0 z-0 w-full h-full object-cover opacity-100"
         />
         <video
           ref={noddingLoopVideoRef}
@@ -1376,7 +1418,7 @@ export default function CallPage() {
           muted
           playsInline
           preload="auto"
-          className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ease-out ${
+          className={`absolute inset-0 z-[1] w-full h-full object-cover transition-opacity duration-300 ease-out ${
             santaMotionState === "nodding" ? "opacity-100" : "opacity-0"
           }`}
         />
@@ -1389,7 +1431,7 @@ export default function CallPage() {
           muted
           playsInline
           preload="auto"
-          className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-200 ease-out ${
+          className={`absolute inset-0 z-[2] w-full h-full object-cover transition-opacity duration-200 ease-out ${
             santaMotionState === "talking" ? "opacity-100" : "opacity-0"
           }`}
         />
@@ -1402,7 +1444,7 @@ export default function CallPage() {
           muted
           playsInline
           preload="auto"
-          className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-200 ease-out ${
+          className={`absolute inset-0 z-[3] w-full h-full object-cover transition-opacity duration-200 ease-out ${
             santaMotionState === "laughing" ? "opacity-100" : "opacity-0"
           }`}
         />
