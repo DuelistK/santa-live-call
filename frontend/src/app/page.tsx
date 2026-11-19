@@ -103,10 +103,10 @@ const AVATAR_MODE_OPTIONS: Array<{
   },
   {
     mode: "loop",
-    shortLabel: "대안 B (루프)",
-    title: "대안 B · 모션 루프 단독",
-    desc: "외부 아바타 API 없이 0원 모션 스테이지만 사용",
-    costBadge: "0원/분",
+    shortLabel: "대안 B (0원 멀티모션)",
+    title: "대안 B · 음성반응 멀티모션",
+    desc: "음절 파형 동기화 4종 모션 · 무제한 장시간 통화",
+    costBadge: "0원/분 ⭐",
   },
   {
     mode: "hybrid",

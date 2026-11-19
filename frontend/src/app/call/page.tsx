@@ -433,6 +433,9 @@ export default function CallPage() {
 
   const [elapsedSec, setElapsedSec] = useState(0);
   const [santaSpeaking, setSantaSpeaking] = useState(false);
+  const [santaMotionState, setSantaMotionState] = useState<
+    "listening" | "nodding" | "talking" | "laughing"
+  >("listening");
   const [childInputText, setChildInputText] = useState("");
   const [detectedGifts, setDetectedGifts] = useState<string[]>(
     note.giftHint && note.giftHint !== "크리스마스 깜짝 선물" ? [note.giftHint] : []
@@ -444,7 +447,9 @@ export default function CallPage() {
   const stageContainerRef = useRef<HTMLDivElement | null>(null);
   const childPipVideoRef = useRef<HTMLVideoElement | null>(null);
   const talkingLoopVideoRef = useRef<HTMLVideoElement | null>(null);
+  const laughingLoopVideoRef = useRef<HTMLVideoElement | null>(null);
   const listeningLoopVideoRef = useRef<HTMLVideoElement | null>(null);
+  const noddingLoopVideoRef = useRef<HTMLVideoElement | null>(null);
   const santaStageImgRef = useRef<HTMLImageElement | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -456,7 +461,8 @@ export default function CallPage() {
   // 캔버스 렌더링 루프에서 최신 상태를 참조하기 위한 Ref
   const latestStateRef = useRef({
     elapsedSec: 0,
-    santaSpeaking: true,
+    santaSpeaking: false,
+    santaMotionState: "listening" as "listening" | "nodding" | "talking" | "laughing",
     latestSantaMessage: "호호호! 반갑구나!",
     latestChildMessage: "",
     displayName: "",
@@ -569,11 +575,13 @@ export default function CallPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 통화 연결 시 모션 루프 비디오(Listening / Talking) 자동 재생 보장
+  // 통화 연결 시 4종 멀티 모션 루프 비디오(Listening / Nodding / Talking / Laughing) 자동 재생 보장
   useEffect(() => {
     if (callPhase === "connected") {
       listeningLoopVideoRef.current?.play().catch(() => {});
+      noddingLoopVideoRef.current?.play().catch(() => {});
       talkingLoopVideoRef.current?.play().catch(() => {});
+      laughingLoopVideoRef.current?.play().catch(() => {});
     }
   }, [callPhase]);
 
@@ -644,6 +652,7 @@ export default function CallPage() {
     latestStateRef.current = {
       elapsedSec,
       santaSpeaking,
+      santaMotionState,
       latestSantaMessage,
       latestChildMessage,
       displayName: displayName || "우리 아이",
@@ -653,6 +662,7 @@ export default function CallPage() {
   }, [
     elapsedSec,
     santaSpeaking,
+    santaMotionState,
     latestSantaMessage,
     latestChildMessage,
     displayName,
@@ -724,7 +734,9 @@ export default function CallPage() {
             !drewSantaStage &&
             v !== childPipVideoRef.current &&
             v !== talkingLoopVideoRef.current &&
+            v !== laughingLoopVideoRef.current &&
             v !== listeningLoopVideoRef.current &&
+            v !== noddingLoopVideoRef.current &&
             v.readyState >= 2 &&
             v.videoWidth > 0 &&
             v.videoHeight > 0
@@ -747,20 +759,25 @@ export default function CallPage() {
         });
       }
 
-      // (우선순위 2) HD 모션 루프 비디오 (대안 B 단독 모드 또는 WebRTC 연결 전 구간)
+      // (우선순위 2) 4종 멀티 모션 루프 비디오 (대안 B 단독 모드 또는 WebRTC 연결 전 구간)
       if (!drewSantaStage) {
-        const primaryLoopVid = st.santaSpeaking
-          ? talkingLoopVideoRef.current
-          : listeningLoopVideoRef.current;
-        const secondaryLoopVid = st.santaSpeaking
-          ? listeningLoopVideoRef.current
-          : talkingLoopVideoRef.current;
+        const stateVidMap = {
+          laughing: laughingLoopVideoRef.current,
+          talking: talkingLoopVideoRef.current,
+          nodding: noddingLoopVideoRef.current,
+          listening: listeningLoopVideoRef.current,
+        };
+        const orderedCandidates = [
+          stateVidMap[st.santaMotionState],
+          talkingLoopVideoRef.current,
+          listeningLoopVideoRef.current,
+          noddingLoopVideoRef.current,
+          laughingLoopVideoRef.current,
+        ];
         const candidateVid =
-          primaryLoopVid && primaryLoopVid.readyState >= 2 && primaryLoopVid.videoWidth > 0
-            ? primaryLoopVid
-            : secondaryLoopVid && secondaryLoopVid.readyState >= 2 && secondaryLoopVid.videoWidth > 0
-            ? secondaryLoopVid
-            : null;
+          orderedCandidates.find(
+            (v) => v && v.readyState >= 2 && v.videoWidth > 0 && v.videoHeight > 0
+          ) || null;
 
         if (candidateVid) {
           try {
@@ -941,19 +958,26 @@ export default function CallPage() {
         silentGain.connect(dest);
         silentOsc.start();
 
-        // 로컬 마이크 스트림 연결
+        // 로컬 마이크 스트림 연결 + 아이 발화 에너지 감지용 AnalyserNode
+        let micAnalyser: AnalyserNode | null = null;
         if (micStreamRef.current && micStreamRef.current.getAudioTracks().length > 0) {
           try {
             const micSource = audioCtx.createMediaStreamSource(micStreamRef.current);
             micSource.connect(dest);
+            micAnalyser = audioCtx.createAnalyser();
+            micAnalyser.fftSize = 256;
+            micAnalyser.smoothingTimeConstant = 0.5;
+            micSource.connect(micAnalyser);
           } catch {
             // ignore
           }
         }
 
-        // LiveKit RoomAudioRenderer가 생성한 원격 <audio> 엘리먼트 스트림 자동 연결 + 실시간 발화 에너지 감지
+        // LiveKit RoomAudioRenderer가 생성한 원격 <audio> 엘리먼트 스트림 자동 연결 + 음절 단위(60ms) 실시간 파형/박자 동기화
         let remoteAnalyser: AnalyserNode | null = null;
         let lastVoiceActiveAt = 0;
+        let lastLaughActiveAt = 0;
+        let lastChildVoiceAt = 0;
 
         const attachRemoteAudioElements = () => {
           const activeAudioCtx = audioCtx;
@@ -969,6 +993,7 @@ export default function CallPage() {
                 if (!remoteAnalyser) {
                   remoteAnalyser = activeAudioCtx.createAnalyser();
                   remoteAnalyser.fftSize = 256;
+                  remoteAnalyser.smoothingTimeConstant = 0.4;
                   remoteSource.connect(remoteAnalyser);
                 }
                 attachedElements.add(el);
@@ -978,6 +1003,8 @@ export default function CallPage() {
             }
           });
 
+          const now = Date.now();
+          let santaEnergy = 0;
           if (remoteAnalyser) {
             const dataArr = new Uint8Array(remoteAnalyser.frequencyBinCount);
             remoteAnalyser.getByteFrequencyData(dataArr);
@@ -985,19 +1012,57 @@ export default function CallPage() {
             for (let i = 0; i < dataArr.length; i += 1) {
               sum += dataArr[i];
             }
-            const avgEnergy = sum / dataArr.length;
-            const now = Date.now();
-            if (avgEnergy > 5) {
-              lastVoiceActiveAt = now;
-              setSantaSpeaking(true);
-            } else if (lastVoiceActiveAt > 0 && now - lastVoiceActiveAt > 850) {
-              setSantaSpeaking(false);
+            santaEnergy = sum / dataArr.length;
+          }
+
+          let childEnergy = 0;
+          if (micAnalyser && micEnabled) {
+            const micArr = new Uint8Array(micAnalyser.frequencyBinCount);
+            micAnalyser.getByteFrequencyData(micArr);
+            let micSum = 0;
+            for (let i = 0; i < micArr.length; i += 1) {
+              micSum += micArr[i];
+            }
+            childEnergy = micSum / micArr.length;
+          }
+
+          if (santaEnergy > 5.5) {
+            lastVoiceActiveAt = now;
+            setSantaSpeaking(true);
+
+            // 음절 에너지 크기에 비례하여 발화 비디오 재생 속도(0.78x ~ 1.28x)를 실시간 조절해 입/수염 박자감 동기화
+            const dynamicRate = Math.min(1.28, Math.max(0.78, 0.76 + (santaEnergy / 38) * 0.48));
+            if (talkingLoopVideoRef.current) {
+              talkingLoopVideoRef.current.playbackRate = dynamicRate;
+            }
+            if (laughingLoopVideoRef.current) {
+              laughingLoopVideoRef.current.playbackRate = dynamicRate;
+            }
+
+            if (santaEnergy > 23) {
+              lastLaughActiveAt = now;
+              setSantaMotionState("laughing");
+            } else if (now - lastLaughActiveAt < 550) {
+              setSantaMotionState("laughing");
+            } else {
+              setSantaMotionState("talking");
+            }
+          } else if (now - lastVoiceActiveAt > 150) {
+            // 문장 사이 쉼표나 말이 멈추면 0.15초 만에 즉시 입을 다물어(listening/nodding) 립싱크 어색함 제거
+            setSantaSpeaking(false);
+            if (childEnergy > 7.5) {
+              lastChildVoiceAt = now;
+              setSantaMotionState("nodding");
+            } else if (now - lastChildVoiceAt < 850) {
+              setSantaMotionState("nodding");
+            } else {
+              setSantaMotionState("listening");
             }
           }
         };
 
         attachRemoteAudioElements();
-        audioScanInterval = setInterval(attachRemoteAudioElements, 120);
+        audioScanInterval = setInterval(attachRemoteAudioElements, 60);
 
         dest.stream.getAudioTracks().forEach((t) => combinedTracks.push(t));
       }
@@ -1276,9 +1341,11 @@ export default function CallPage() {
       <SantaMagicStageOverlay magic={activeMagic} />
 
       {/* ============================================================
-          HD 모션 루프 산타 비디오 스테이지 (대안 B 단독 모드 및 하이브리드/WebRTC 대기 구간)
-          - santaSpeaking === true 일 때: 실제 산타 발화 모션 비디오 (/videos/santa-talking.mp4)
-          - santaSpeaking === false 일 때: 실제 산타 경청/끄덕임 모션 비디오 (/videos/santa-listening.mp4)
+          실시간 음성 파형 반응형 4종 멀티 모션 산타 스테이지 ($0/분, 무제한 통화 지원)
+          1) listening: 평상시 미소 지으며 눈 깜빡임 (/videos/santa-listening.mp4)
+          2) nodding: 아이가 말할 때 고개를 끄덕이며 맞장구 (/videos/santa-nodding.mp4)
+          3) talking: 일반 대화 발화 + 음절 에너지 비례 속도 제어 (/videos/santa-talking.mp4)
+          4) laughing: "호호호!" 큰 웃음 및 강조 발화 (/videos/santa-laughing.mp4)
       ============================================================ */}
       <div
         className={`pointer-events-none absolute inset-0 overflow-hidden transition-opacity duration-500 ${
@@ -1296,8 +1363,21 @@ export default function CallPage() {
           muted
           playsInline
           preload="auto"
-          className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-700 ease-in-out ${
-            santaSpeaking ? "opacity-0" : "opacity-100"
+          className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-200 ease-out ${
+            santaMotionState === "listening" ? "opacity-100" : "opacity-0"
+          }`}
+        />
+        <video
+          ref={noddingLoopVideoRef}
+          src="/videos/santa-nodding.mp4"
+          poster="/images/santa-live-stage.png"
+          autoPlay
+          loop
+          muted
+          playsInline
+          preload="auto"
+          className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ease-out ${
+            santaMotionState === "nodding" ? "opacity-100" : "opacity-0"
           }`}
         />
         <video
@@ -1309,8 +1389,21 @@ export default function CallPage() {
           muted
           playsInline
           preload="auto"
-          className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-700 ease-in-out ${
-            santaSpeaking ? "opacity-100" : "opacity-0"
+          className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-200 ease-out ${
+            santaMotionState === "talking" ? "opacity-100" : "opacity-0"
+          }`}
+        />
+        <video
+          ref={laughingLoopVideoRef}
+          src="/videos/santa-laughing.mp4"
+          poster="/images/santa-live-stage.png"
+          autoPlay
+          loop
+          muted
+          playsInline
+          preload="auto"
+          className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-200 ease-out ${
+            santaMotionState === "laughing" ? "opacity-100" : "opacity-0"
           }`}
         />
       </div>

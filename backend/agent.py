@@ -905,7 +905,14 @@ async def entrypoint(ctx: JobContext) -> None:
                         )
                     )
 
-                if not wrapup_sent and not farewell_requested and (now - call_started) >= 150.0:
+                # 사용자가 대화를 계속 이어가는 동안에는 시간제한 없이 얼마든지 길게 통화할 수 있도록 보장하고,
+                # 통화 2분 경과 후 45초 이상 완전 침묵(무응답)이 지속될 때만 자연스럽게 마무리 인사를 건네고 종료합니다.
+                if (
+                    not wrapup_sent
+                    and not farewell_requested
+                    and (now - call_started) >= 120.0
+                    and (now - last_activity_ts) >= 45.0
+                ):
                     wrapup_sent = True
                     farewell_requested = True
                     fx_packet = json.dumps(
