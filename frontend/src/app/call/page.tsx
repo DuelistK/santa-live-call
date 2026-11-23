@@ -9,9 +9,10 @@ import {
   VideoTrack,
   useDataChannel,
   useLocalParticipant,
+  useRoomContext,
   useTracks,
 } from "@livekit/components-react";
-import { Track } from "livekit-client";
+import { RoomEvent, Track } from "livekit-client";
 import {
   Mic,
   MicOff,
@@ -293,7 +294,7 @@ const ChildFrontCameraPip = React.memo(function ChildFrontCameraPip({
   );
 });
 
-// LiveKit Room 내부 실시간 아바타 비디오 트랙 & DataChannel 수신 컴포넌트
+// LiveKit Room 내부 실시간 아바타 비디오/오디오 트랙 & DataChannel 수신 컴포넌트
 function LiveKitActiveStage({
   onAvatarReady,
   onRemoteReport,
@@ -301,6 +302,10 @@ function LiveKitActiveStage({
   onRemoteMagicFx,
   onRemoteEndCall,
   onProvideChatSender,
+  onLocalMicTrack,
+  onRemoteAudioTracks,
+  onAudioPlaybackBlocked,
+  onProvideAudioUnlocker,
   micEnabled,
 }: {
   onAvatarReady: (hasVideo: boolean) => void;
@@ -309,16 +314,67 @@ function LiveKitActiveStage({
   onRemoteMagicFx: (effect: SantaMagicEffectType, message: string) => void;
   onRemoteEndCall: () => void;
   onProvideChatSender: (sender: ((text: string) => void) | null) => void;
+  onLocalMicTrack: (track: MediaStreamTrack | null) => void;
+  onRemoteAudioTracks: (tracks: MediaStreamTrack[]) => void;
+  onAudioPlaybackBlocked: (blocked: boolean) => void;
+  onProvideAudioUnlocker: (unlocker: (() => void) | null) => void;
   micEnabled: boolean;
 }) {
+  const room = useRoomContext();
   const tracks = useTracks(
-    [Track.Source.Camera, Track.Source.ScreenShare, Track.Source.Unknown],
+    [
+      Track.Source.Camera,
+      Track.Source.Microphone,
+      Track.Source.ScreenShare,
+      Track.Source.Unknown,
+    ],
     { onlySubscribed: false }
   );
   const { localParticipant } = useLocalParticipant();
 
+  // 브라우저 자동재생 정책으로 원격 오디오가 잠기지 않도록 room.startAudio() 자동/수동 해제 연동
   useEffect(() => {
-    localParticipant.setMicrophoneEnabled(micEnabled).catch(() => {});
+    const syncPlaybackState = () => {
+      onAudioPlaybackBlocked(!room.canPlaybackAudio);
+    };
+    const unlockAudio = () => {
+      room
+        .startAudio()
+        .then(() => {
+          onAudioPlaybackBlocked(!room.canPlaybackAudio);
+        })
+        .catch(() => {
+          onAudioPlaybackBlocked(!room.canPlaybackAudio);
+        });
+    };
+
+    unlockAudio();
+    onProvideAudioUnlocker(unlockAudio);
+    room.on(RoomEvent.AudioPlaybackStatusChanged, syncPlaybackState);
+    window.addEventListener("pointerdown", unlockAudio, { passive: true });
+    window.addEventListener("touchstart", unlockAudio, { passive: true });
+
+    return () => {
+      onProvideAudioUnlocker(null);
+      room.off(RoomEvent.AudioPlaybackStatusChanged, syncPlaybackState);
+      window.removeEventListener("pointerdown", unlockAudio);
+      window.removeEventListener("touchstart", unlockAudio);
+    };
+  }, [room, onAudioPlaybackBlocked, onProvideAudioUnlocker]);
+
+  useEffect(() => {
+    localParticipant
+      .setMicrophoneEnabled(
+        micEnabled,
+        micEnabled
+          ? {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+            }
+          : undefined
+      )
+      .catch(() => {});
   }, [localParticipant, micEnabled]);
 
   useEffect(() => {
@@ -343,6 +399,30 @@ function LiveKitActiveStage({
   useEffect(() => {
     onAvatarReady(Boolean(remoteAvatarTrack));
   }, [remoteAvatarTrack, onAvatarReady]);
+
+  // LiveKit이 관리하는 단일 로컬 마이크 트랙 및 원격 오디오 트랙을 상위(클론 분석/녹화용)로 전달
+  const localMicMediaTrack =
+    tracks.find((t) => t.participant.isLocal && t.publication?.kind === Track.Kind.Audio)
+      ?.publication?.track?.mediaStreamTrack ?? null;
+
+  useEffect(() => {
+    onLocalMicTrack(localMicMediaTrack);
+    return () => onLocalMicTrack(null);
+  }, [localMicMediaTrack, onLocalMicTrack]);
+
+  const remoteAudioMediaTracks = tracks
+    .filter((t) => !t.participant.isLocal && t.publication?.kind === Track.Kind.Audio)
+    .map((t) => t.publication?.track?.mediaStreamTrack)
+    .filter((t): t is MediaStreamTrack => Boolean(t));
+  const remoteAudioKey = remoteAudioMediaTracks.map((t) => `${t.id}:${t.readyState}`).join(",");
+
+  useEffect(() => {
+    onRemoteAudioTracks(remoteAudioMediaTracks);
+    if (remoteAudioMediaTracks.length > 0 && !room.canPlaybackAudio) {
+      room.startAudio().catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [remoteAudioKey, onRemoteAudioTracks, room]);
 
   // 선물 키워드 리포트 수신
   useDataChannel("santa-report", (msg) => {
@@ -430,6 +510,7 @@ export default function CallPage() {
 
   const [micPermissionState, setMicPermissionState] = useState<"prompt" | "granted" | "denied">("prompt");
   const [camPermissionWarning, setCamPermissionWarning] = useState(false);
+  const [audioPlaybackBlocked, setAudioPlaybackBlocked] = useState(false);
 
   const [elapsedSec, setElapsedSec] = useState(0);
   const [santaSpeaking, setSantaSpeaking] = useState(false);
@@ -444,6 +525,7 @@ export default function CallPage() {
   const [activeMagic, setActiveMagic] = useState<SantaMagicEvent | null>(null);
 
   const livekitChatSenderRef = useRef<((text: string) => void) | null>(null);
+  const unlockRoomAudioRef = useRef<(() => void) | null>(null);
   const stageContainerRef = useRef<HTMLDivElement | null>(null);
   const childPipVideoRef = useRef<HTMLVideoElement | null>(null);
   const talkingLoopVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -451,7 +533,9 @@ export default function CallPage() {
   const listeningLoopVideoRef = useRef<HTMLVideoElement | null>(null);
   const noddingLoopVideoRef = useRef<HTMLVideoElement | null>(null);
   const santaStageImgRef = useRef<HTMLImageElement | null>(null);
-  const micStreamRef = useRef<MediaStream | null>(null);
+  const localMicTrackRef = useRef<MediaStreamTrack | null>(null);
+  const remoteAudioTracksRef = useRef<MediaStreamTrack[]>([]);
+  const initialTokenFetchedRef = useRef(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
   const magicTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -522,20 +606,48 @@ export default function CallPage() {
   // 발신 연결 중일 때 부드러운 전화 연결음 재생
   useOutgoingDialTone(callPhase === "dialing", ringMuted);
 
-  // 마이크 권한 사전 확인 및 오디오 스트림 보관(하이라이트 녹화 믹싱용)
+  // 마이크 권한 수동 재시도 (이중 마이크 점유로 인한 에코 캔슬레이션 해제를 막기 위해 확인 직후 즉시 트랙을 닫고 LiveKit 단독 점유 유지)
   const requestMicPermission = useCallback(async () => {
     if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
       return;
     }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      micStreamRef.current = stream;
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+      stream.getTracks().forEach((t) => t.stop());
       setMicPermissionState("granted");
+      setMicEnabled(true);
     } catch {
       setMicPermissionState("denied");
       setMicEnabled(false);
       setShowPromptSheet(true);
     }
+  }, []);
+
+  const handleLocalMicTrack = useCallback((track: MediaStreamTrack | null) => {
+    localMicTrackRef.current = track;
+    if (track) {
+      setMicPermissionState("granted");
+    }
+  }, []);
+
+  const handleRemoteAudioTracks = useCallback((tracks: MediaStreamTrack[]) => {
+    remoteAudioTracksRef.current = tracks;
+  }, []);
+
+  const handleProvideAudioUnlocker = useCallback((unlocker: (() => void) | null) => {
+    unlockRoomAudioRef.current = unlocker;
+  }, []);
+
+  const handleMediaDeviceFailure = useCallback(() => {
+    setMicPermissionState("denied");
+    setMicEnabled(false);
+    setShowPromptSheet(true);
   }, []);
 
   // LiveKit 연결 토큰 발급
@@ -559,8 +671,10 @@ export default function CallPage() {
 
   useEffect(() => {
     setRecordedVideo(null);
-    requestMicPermission();
-    fetchConnectionToken();
+    if (!initialTokenFetchedRef.current) {
+      initialTokenFetchedRef.current = true;
+      fetchConnectionToken();
+    }
 
     // 녹화 캔버스에서 첫 프레임부터 실사 산타가 그려지도록 배경 이미지를 사전 로드
     if (typeof window !== "undefined") {
@@ -570,7 +684,6 @@ export default function CallPage() {
     }
 
     return () => {
-      micStreamRef.current?.getTracks().forEach((t) => t.stop());
       if (magicTimerRef.current) clearTimeout(magicTimerRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -936,11 +1049,51 @@ export default function CallPage() {
     drawCompositeFrame();
     const drawInterval = setInterval(drawCompositeFrame, 50);
 
-    // 캔버스 비디오 스트림 + 오디오 스트림(마이크 & LiveKit 원격 오디오) 결합
+    // 캔버스 비디오 스트림 + 복제(clone)된 오디오 트랙 결합
+    // 주의: <RoomAudioRenderer>의 원본 <audio>.srcObject에 직접 createMediaStreamSource를 연결하면
+    // 모바일/WebKit 및 일부 Chromium에서 스피커 출력이 무음 처리되거나 WebRTC 에코 캔슬레이션(AEC)이 깨지므로,
+    // 반드시 track.clone() 복제본만 WebAudio 분석기 및 MediaRecorder에 연결합니다.
     let audioCtx: AudioContext | null = null;
     let audioScanInterval: ReturnType<typeof setInterval> | null = null;
     let resumeAudioContext: (() => void) | null = null;
-    const attachedElements = new WeakSet<HTMLAudioElement>();
+    const clonedRemoteMap = new Map<
+      string,
+      { clone: MediaStreamTrack; source: MediaStreamAudioSourceNode }
+    >();
+    let clonedMicEntry: {
+      origId: string;
+      clone: MediaStreamTrack;
+      source: MediaStreamAudioSourceNode;
+    } | null = null;
+
+    const cleanupClonedTracks = () => {
+      clonedRemoteMap.forEach((entry) => {
+        try {
+          entry.source.disconnect();
+        } catch {
+          // ignore
+        }
+        try {
+          entry.clone.stop();
+        } catch {
+          // ignore
+        }
+      });
+      clonedRemoteMap.clear();
+      if (clonedMicEntry) {
+        try {
+          clonedMicEntry.source.disconnect();
+        } catch {
+          // ignore
+        }
+        try {
+          clonedMicEntry.clone.stop();
+        } catch {
+          // ignore
+        }
+        clonedMicEntry = null;
+      }
+    };
 
     try {
       const canvasStream = canvas.captureStream(20);
@@ -972,24 +1125,13 @@ export default function CallPage() {
         silentGain.connect(dest);
         silentOsc.start();
 
-        // 로컬 마이크 스트림 연결 + 아이 발화 에너지 감지용 AnalyserNode
-        let micAnalyser: AnalyserNode | null = null;
-        let micFreqBuf: Uint8Array<ArrayBuffer> | null = null;
-        if (micStreamRef.current && micStreamRef.current.getAudioTracks().length > 0) {
-          try {
-            const micSource = audioCtx.createMediaStreamSource(micStreamRef.current);
-            micSource.connect(dest);
-            micAnalyser = audioCtx.createAnalyser();
-            micAnalyser.fftSize = 256;
-            micAnalyser.smoothingTimeConstant = 0.5;
-            micSource.connect(micAnalyser);
-            micFreqBuf = new Uint8Array(micAnalyser.frequencyBinCount);
-          } catch {
-            // ignore
-          }
-        }
+        // 로컬 마이크(클론) 분석용 AnalyserNode
+        const micAnalyser = audioCtx.createAnalyser();
+        micAnalyser.fftSize = 256;
+        micAnalyser.smoothingTimeConstant = 0.5;
+        const micFreqBuf = new Uint8Array(micAnalyser.frequencyBinCount);
 
-        // 모든 원격 <audio> 엘리먼트가 공유하는 단일 AnalyserNode 생성 (트랙 재생성/추가 시에도 파형 누락 방지)
+        // 원격 산타 음성(클론) 분석용 단일 AnalyserNode
         const remoteAnalyser = audioCtx.createAnalyser();
         remoteAnalyser.fftSize = 256;
         remoteAnalyser.smoothingTimeConstant = 0.4;
@@ -1001,28 +1143,89 @@ export default function CallPage() {
         let prevSpeaking = latestStateRef.current.santaSpeaking;
         let prevMotionState = latestStateRef.current.santaMotionState;
 
-        const attachRemoteAudioElements = () => {
+        const syncClonedAudioAndAnalyze = () => {
           const activeAudioCtx = audioCtx;
           if (!activeAudioCtx) return;
           if (activeAudioCtx.state === "suspended") {
             activeAudioCtx.resume().catch(() => {});
           }
 
-          const audioEls = document.querySelectorAll("audio");
-          audioEls.forEach((el) => {
-            if (attachedElements.has(el)) return;
-            const mediaStream = el.srcObject as MediaStream | null;
-            if (mediaStream && mediaStream.getAudioTracks().length > 0) {
+          // 1. LiveKit 원격 오디오 트랙 클론 동기화 (<RoomAudioRenderer> 원본 스피커 출력과 100% 분리)
+          const liveRemoteTracks = remoteAudioTracksRef.current.filter(
+            (t) => t.readyState === "live"
+          );
+          const liveRemoteIds = new Set(liveRemoteTracks.map((t) => t.id));
+
+          clonedRemoteMap.forEach((entry, id) => {
+            if (!liveRemoteIds.has(id) || entry.clone.readyState === "ended") {
               try {
-                const remoteSource = activeAudioCtx.createMediaStreamSource(mediaStream);
-                remoteSource.connect(dest);
-                remoteSource.connect(remoteAnalyser);
-                attachedElements.add(el);
+                entry.source.disconnect();
+              } catch {
+                // ignore
+              }
+              try {
+                entry.clone.stop();
+              } catch {
+                // ignore
+              }
+              clonedRemoteMap.delete(id);
+            }
+          });
+
+          liveRemoteTracks.forEach((track) => {
+            if (clonedRemoteMap.has(track.id)) return;
+            try {
+              const clone = track.clone();
+              const clonedStream = new MediaStream([clone]);
+              const remoteSource = activeAudioCtx.createMediaStreamSource(clonedStream);
+              remoteSource.connect(dest);
+              remoteSource.connect(remoteAnalyser);
+              clonedRemoteMap.set(track.id, { clone, source: remoteSource });
+            } catch {
+              // ignore
+            }
+          });
+
+          // 2. LiveKit 로컬 마이크 트랙 클론 동기화 (이중 getUserMedia 없이 단일 AEC 마이크 트랙 공유)
+          const liveMic =
+            localMicTrackRef.current && localMicTrackRef.current.readyState === "live"
+              ? localMicTrackRef.current
+              : null;
+          if (!liveMic && clonedMicEntry) {
+            try {
+              clonedMicEntry.source.disconnect();
+            } catch {
+              // ignore
+            }
+            try {
+              clonedMicEntry.clone.stop();
+            } catch {
+              // ignore
+            }
+            clonedMicEntry = null;
+          } else if (liveMic && (!clonedMicEntry || clonedMicEntry.origId !== liveMic.id)) {
+            if (clonedMicEntry) {
+              try {
+                clonedMicEntry.source.disconnect();
+              } catch {
+                // ignore
+              }
+              try {
+                clonedMicEntry.clone.stop();
               } catch {
                 // ignore
               }
             }
-          });
+            try {
+              const clone = liveMic.clone();
+              const micSource = activeAudioCtx.createMediaStreamSource(new MediaStream([clone]));
+              micSource.connect(dest);
+              micSource.connect(micAnalyser);
+              clonedMicEntry = { origId: liveMic.id, clone, source: micSource };
+            } catch {
+              clonedMicEntry = null;
+            }
+          }
 
           const now = Date.now();
           remoteAnalyser.getByteFrequencyData(remoteFreqBuf);
@@ -1033,7 +1236,7 @@ export default function CallPage() {
           const santaEnergy = sum / remoteFreqBuf.length;
 
           let childEnergy = 0;
-          if (micAnalyser && micFreqBuf && latestStateRef.current.micEnabled) {
+          if (clonedMicEntry && latestStateRef.current.micEnabled) {
             micAnalyser.getByteFrequencyData(micFreqBuf);
             let micSum = 0;
             for (let i = 0; i < micFreqBuf.length; i += 1) {
@@ -1090,8 +1293,8 @@ export default function CallPage() {
           }
         };
 
-        attachRemoteAudioElements();
-        audioScanInterval = setInterval(attachRemoteAudioElements, 60);
+        syncClonedAudioAndAnalyze();
+        audioScanInterval = setInterval(syncClonedAudioAndAnalyze, 60);
 
         dest.stream.getAudioTracks().forEach((t) => combinedTracks.push(t));
       }
@@ -1138,6 +1341,7 @@ export default function CallPage() {
           // ignore
         }
       }
+      cleanupClonedTracks();
       if (audioCtx) {
         audioCtx.close().catch(() => {});
       }
@@ -1364,8 +1568,17 @@ export default function CallPage() {
           serverUrl={connDetails.serverUrl}
           token={connDetails.participantToken}
           connect={true}
-          audio={micEnabled && micPermissionState !== "denied"}
+          audio={
+            micEnabled && micPermissionState !== "denied"
+              ? {
+                  echoCancellation: true,
+                  noiseSuppression: true,
+                  autoGainControl: true,
+                }
+              : false
+          }
           video={false}
+          onMediaDeviceFailure={handleMediaDeviceFailure}
           className="absolute inset-0 z-10 pointer-events-none"
         >
           <RoomAudioRenderer />
@@ -1376,6 +1589,10 @@ export default function CallPage() {
             onRemoteMagicFx={triggerMagicEffect}
             onRemoteEndCall={handleRemoteEndCall}
             onProvideChatSender={handleProvideChatSender}
+            onLocalMicTrack={handleLocalMicTrack}
+            onRemoteAudioTracks={handleRemoteAudioTracks}
+            onAudioPlaybackBlocked={setAudioPlaybackBlocked}
+            onProvideAudioUnlocker={handleProvideAudioUnlocker}
             micEnabled={micEnabled && micPermissionState !== "denied"}
           />
         </LiveKitRoom>
@@ -1562,6 +1779,18 @@ export default function CallPage() {
             onPermissionDenied={handleCamPermissionDenied}
           />
         </div>
+
+        {/* 모바일 브라우저 자동재생 정책으로 원격 스피커 오디오가 잠겼을 때 원터치 해제 배너 */}
+        {audioPlaybackBlocked && callPhase === "connected" && (
+          <button
+            type="button"
+            onClick={() => unlockRoomAudioRef.current?.()}
+            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl bg-[#D4AF37] text-[#0A0F1D] text-xs font-bold shadow-lg animate-pulse"
+          >
+            <Volume2 className="w-4 h-4 shrink-0" />
+            <span>터치하여 산타할아버지 목소리 켜기</span>
+          </button>
+        )}
 
         {/* 마이크 권한 거부 안내 배너 */}
         {micPermissionState === "denied" && (

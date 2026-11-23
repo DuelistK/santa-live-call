@@ -82,6 +82,15 @@ def _configure_windows_ca_bundle() -> None:
             return ctx
 
         ssl.create_default_context = _relaxed_create_default_context  # type: ignore
+
+        # livekit.agents 서브프로세스가 agent.py import 이전에 preload한 aiohttp의 캐시된 SSLContext도 함께 갱신하여
+        # Anam 등 자체 aiohttp.ClientSession()을 사용하는 플러그인의 SSL 인증서 오류(Missing Authority Key Identifier)를 방지합니다.
+        try:
+            import aiohttp.connector
+
+            aiohttp.connector._SSL_CONTEXT_VERIFIED = _shared_server_auth_ctx  # type: ignore[attr-defined]
+        except Exception:
+            pass
     except Exception:
         pass
 
@@ -90,15 +99,21 @@ _configure_windows_ca_bundle()
 
 from livekit import rtc
 from livekit.agents import (
+    APIConnectOptions,
     Agent,
     AgentSession,
     AutoSubscribe,
     JobContext,
+    JobProcess,
     RunContext,
     WorkerOptions,
     cli,
     function_tool,
 )
+try:
+    from livekit.agents.voice.io import _AudioSinkProxy
+except ImportError:
+    _AudioSinkProxy = None  # type: ignore
 # 주의: LiveKit 플러그인들은 반드시 메인 스레드(파일 최상단)에서 import 해야 워커에 정상 등록됩니다!
 from livekit.plugins import anam, deepgram, elevenlabs, google, lemonslice, liveavatar, silero, simli
 
@@ -314,6 +329,11 @@ class AvatarFactory:
                 persona_config=anam.PersonaConfig(
                     name="Santa",
                     avatarId=avatar_id,
+                ),
+                conn_options=APIConnectOptions(
+                    max_retry=1,
+                    retry_interval=0.5,
+                    timeout=8.0,
                 ),
             )
             return avatar
@@ -646,27 +666,45 @@ async def entrypoint(ctx: JobContext) -> None:
             use_speaker_boost=True,
         ),
         auto_mode=False,
-        chunk_length_schedule=[50, 90, 140, 200],
         apply_text_normalization="off",
     )
 
-    # 한국어 STT(Deepgram) 최종 전사 지연(0.30~0.44초)보다 min_endpointing_delay(0.55초)를 여유 있게 유지하되,
-    # preemptive_generation=True로 0.55초 대기 구간 동안 LLM 답변을 선제 생성하여 체감 지연을 단축합니다.
-    try:
-        vad_engine = silero.VAD.load(min_silence_duration=0.50, min_speech_duration=0.15)
-    except TypeError:
-        vad_engine = silero.VAD.load()
+    # prewarm된 Silero VAD가 있으면 재사용하여 진입 시 ONNX 초기화 블로킹(150~250ms) 제거
+    prewarmed_vad = getattr(ctx.proc, "userdata", {}).get("vad") if getattr(ctx, "proc", None) else None
+    if prewarmed_vad is not None:
+        vad_engine = prewarmed_vad
+    else:
+        try:
+            vad_engine = silero.VAD.load(min_silence_duration=0.50, min_speech_duration=0.15)
+        except TypeError:
+            vad_engine = silero.VAD.load()
 
+    # TurnHandlingOptions(v1.8+)로 고정:
+    # - interruption mode="vad" + min_duration=0.65 / min_words=2로 50ms대 스피커 잔향/노이즈에 의한 오작동(자가 끊김) 원천 차단
+    # - min_delay=0.55 유지 상태에서 preemptive_generation 활성화
     session = AgentSession(
         vad=vad_engine,
         stt=stt_engine,
         llm=llm_engine,
         tts=tts_engine,
-        preemptive_generation=True,
-        min_endpointing_delay=0.55,
-        max_endpointing_delay=1.10,
-        min_interruption_duration=0.65,
-        min_interruption_words=2,
+        turn_handling={
+            "endpointing": {
+                "mode": "fixed",
+                "min_delay": 0.55,
+                "max_delay": 1.10,
+            },
+            "interruption": {
+                "enabled": True,
+                "mode": "vad",
+                "min_duration": 0.65,
+                "min_words": 2,
+                "resume_false_interruption": True,
+                "false_interruption_timeout": 1.2,
+            },
+            "preemptive_generation": {
+                "enabled": True,
+            },
+        },
     )
 
     santa_agent = SantaClausAgent(note=note, room=ctx.room)
@@ -834,24 +872,53 @@ async def entrypoint(ctx: JobContext) -> None:
         room=ctx.room,
     )
 
+    # 아바타 연결 실패/지연 시 기본 WebRTC 직접 음성 출력(RoomIO)으로 복구하기 위해 원본 오디오 싱크 보관
+    orig_audio_tail: Any = None
+    if _AudioSinkProxy is not None:
+        cur_sink = getattr(session.output, "_audio_sink", None)
+        while cur_sink is not None:
+            if isinstance(cur_sink, _AudioSinkProxy):
+                orig_audio_tail = cur_sink.next_in_chain
+                break
+            cur_sink = getattr(cur_sink, "next_in_chain", None)
+
     avatar = AvatarFactory.create_avatar_session(override_provider=note.avatarProvider)
     if avatar is not None:
+        avatar_ready = False
         try:
-            await avatar.start(session, room=ctx.room)
-            logger.info("Real-time Santa avatar session started successfully.")
-            # 아바타 비디오 트랙이 실제로 퍼블리시되어 오디오 스트림 수신 준비가 끝날 때까지 대기 (초반 음성 버스트/밀림 방지)
-            for _ in range(36):
+            await asyncio.wait_for(avatar.start(session, room=ctx.room), timeout=10.0)
+            logger.info("Real-time Santa avatar session started; waiting for remote video track...")
+            # 아바타 비디오 트랙이 실제로 퍼블리시되어 오디오 수신 준비가 끝날 때까지 대기 (최대 6.5초)
+            for _ in range(65):
                 has_avatar_video = any(
                     pub.kind == rtc.TrackKind.KIND_VIDEO
                     for p in ctx.room.remote_participants.values()
                     for pub in p.track_publications.values()
                 )
                 if has_avatar_video:
+                    avatar_ready = True
                     break
                 await asyncio.sleep(0.1)
-            await asyncio.sleep(0.45)
+            if avatar_ready:
+                await asyncio.sleep(0.35)
+                logger.info("Remote avatar video track confirmed ready.")
+            else:
+                logger.warning(
+                    "Avatar participant did not publish video within 6.5s; restoring direct voice output."
+                )
         except Exception as exc:
-            logger.error("Avatar session failed to start; continuing with voice session: %s", exc)
+            logger.error("Avatar session failed to start; restoring direct voice output: %s", exc)
+
+        if not avatar_ready:
+            if orig_audio_tail is not None:
+                try:
+                    session.output.replace_audio_tail(orig_audio_tail)
+                except Exception as restore_exc:
+                    logger.warning("Failed to restore orig_audio_tail: %s", restore_exc)
+            try:
+                await avatar.aclose()
+            except Exception:
+                pass
 
     # 초기 리포트 상태 프론트엔드 동기화
     await santa_agent.publish_report_to_frontend()
@@ -967,10 +1034,24 @@ def _cleanup_stale_agent_workers() -> None:
         pass
 
 
+def prewarm_process(proc: JobProcess) -> None:
+    """워커 유휴 서브프로세스를 미리 초기화하여 모드 전환/재접속 시 콜드 스타트 지연과 SSL 오류를 방지합니다."""
+    _configure_windows_ca_bundle()
+    try:
+        proc.userdata["vad"] = silero.VAD.load(min_silence_duration=0.50, min_speech_duration=0.15)
+    except Exception:
+        try:
+            proc.userdata["vad"] = silero.VAD.load()
+        except Exception:
+            pass
+
+
 if __name__ == "__main__":
     _cleanup_stale_agent_workers()
     cli.run_app(
         WorkerOptions(
             entrypoint_fnc=entrypoint,
+            prewarm_fnc=prewarm_process,
+            num_idle_processes=2,
         )
     )
