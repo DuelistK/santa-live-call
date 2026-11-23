@@ -17,6 +17,8 @@ import asyncio
 import json
 import logging
 import os
+import re
+import time
 from dataclasses import asdict, dataclass, field
 from typing import Any, Optional
 
@@ -106,6 +108,7 @@ from livekit.agents import (
     JobContext,
     JobProcess,
     RunContext,
+    StopResponse,
     WorkerOptions,
     cli,
     function_tool,
@@ -280,9 +283,9 @@ class AvatarFactory:
             logger.warning("SIMLI_API_KEY not set yet; falling back to Anam avatar for testing.")
             return AvatarFactory._create_anam_avatar()
 
-        # 하이브리드 모드: 프론트엔드에서 즉시 모션 루프로 시작한 뒤 백엔드 실시간 아바타(Simli 우선, 없으면 Anam)로 자동 전환
+        # 하이브리드 모드: 프론트엔드에서 0초 모션 루프로 즉시 시작한 뒤 백엔드 실사 산타 아바타(Anam 우선)로 자동 전환
         if provider == "hybrid":
-            return AvatarFactory._create_simli_avatar() or AvatarFactory._create_anam_avatar()
+            return AvatarFactory._create_anam_avatar() or AvatarFactory._create_simli_avatar()
 
         if provider == "heygen":
             return AvatarFactory._create_heygen_liveavatar()
@@ -306,6 +309,11 @@ class AvatarFactory:
                 simli_config=simli.SimliConfig(
                     api_key=api_key,
                     face_id=face_id,
+                ),
+                conn_options=APIConnectOptions(
+                    max_retry=2,
+                    retry_interval=1.2,
+                    timeout=8.0,
                 ),
             )
         except Exception as exc:
@@ -397,6 +405,7 @@ class SantaClausAgent(Agent):
         super().__init__(instructions=build_santa_system_prompt(note))
         self.note = note
         self.room = room
+        self.recent_santa_texts: list[tuple[float, str]] = []
         self.report = SantaReportPayload(
             childName=note.childName,
             detectedGifts=[],
@@ -404,6 +413,52 @@ class SantaClausAgent(Agent):
             missionPromise=f"'{note.mission}' 약속을 산타할아버지와 함께 다짐했어요!",
             santaComment=f"올해 '{note.praise}' 모습을 보여준 {note.childName}, 정말 기특하구나! 호호호!",
         )
+
+    @staticmethod
+    def _normalize_hangul(text: str) -> str:
+        return re.sub(r"[^가-힣0-9]", "", text)
+
+    def record_santa_utterance(self, text: str) -> None:
+        norm = self._normalize_hangul(text)
+        if not norm:
+            return
+        now = time.monotonic()
+        self.recent_santa_texts = [
+            (ts, s) for ts, s in self.recent_santa_texts if (now - ts) <= 16.0
+        ]
+        self.recent_santa_texts.append((now, norm))
+
+    def is_self_echo(self, user_text: str) -> bool:
+        """스마트폰 스피커폰 최대 볼륨 사용 시 스피커 음성이 마이크로 되먹임(Echo)된 문장인지 판별합니다."""
+        norm_user = self._normalize_hangul(user_text)
+        if len(norm_user) < 5:
+            return False
+        now = time.monotonic()
+        recent_norms = [s for ts, s in self.recent_santa_texts if (now - ts) <= 14.0]
+        if not recent_norms:
+            return False
+        combined_santa = " ".join(recent_norms)
+        if norm_user in combined_santa:
+            return True
+        user_bigrams = [norm_user[i : i + 2] for i in range(len(norm_user) - 1)]
+        if not user_bigrams:
+            return False
+        matched = sum(1 for bg in user_bigrams if bg in combined_santa)
+        return (matched / len(user_bigrams)) >= 0.62
+
+    async def on_user_turn_completed(self, turn_ctx: Any, new_message: Any) -> None:
+        try:
+            raw_text = getattr(new_message, "text_content", "")
+            if callable(raw_text):
+                raw_text = raw_text()
+            text_str = str(raw_text or "").strip()
+            if text_str and self.is_self_echo(text_str):
+                logger.info("Blocked speakerphone self-echo transcript: %s", text_str)
+                raise StopResponse()
+        except StopResponse:
+            raise
+        except Exception:
+            pass
 
     async def record_child_gift_wish(
         self,
@@ -768,12 +823,15 @@ async def entrypoint(ctx: JobContext) -> None:
             last_activity_ts = now_ts
 
             if speaker == "child":
+                if santa_agent.is_self_echo(text_str):
+                    return
                 child_turn_count += 1
                 if any(kw in text_str for kw in farewell_keywords):
                     logger.info("Farewell detected from child transcript: %s", text_str)
                     farewell_requested = True
                     asyncio.create_task(_trigger_graceful_hangup(delay_sec=15.0, reason="farewell_timeout"))
             else:
+                santa_agent.record_santa_utterance(text_str)
                 # 산타의 마무리 인사(작별 요청 직후의 답변이거나, 대화 후반부 명확한 작별 멘트)가 끝났을 때 자동 통화 종료
                 is_santa_closing = (
                     child_turn_count >= 1
@@ -909,7 +967,19 @@ async def entrypoint(ctx: JobContext) -> None:
         except Exception as exc:
             logger.error("Avatar session failed to start; restoring direct voice output: %s", exc)
 
-        if not avatar_ready:
+        if avatar_ready:
+            # 사용자가 통화를 종료하거나 모드를 전환할 때 25초 리포트 업로드를 기다리지 않고 아바타 세션을 즉시 닫아 429 제한 방지
+            avatar_closed = False
+
+            def _on_participant_disconnected(participant: rtc.RemoteParticipant) -> None:
+                nonlocal avatar_closed
+                if avatar_closed or participant.identity == getattr(avatar, "avatar_identity", ""):
+                    return
+                avatar_closed = True
+                asyncio.create_task(avatar.aclose())
+
+            ctx.room.on("participant_disconnected", _on_participant_disconnected)
+        else:
             if orig_audio_tail is not None:
                 try:
                     session.output.replace_audio_tail(orig_audio_tail)

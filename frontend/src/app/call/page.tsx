@@ -6,7 +6,6 @@ import { useRouter } from "next/navigation";
 import {
   LiveKitRoom,
   RoomAudioRenderer,
-  VideoTrack,
   useDataChannel,
   useLocalParticipant,
   useRoomContext,
@@ -201,16 +200,18 @@ function SantaMagicStageOverlay({ magic }: { magic: SantaMagicEvent | null }) {
   );
 }
 
-// 우측 상단 전면 카메라 PIP (부모 리렌더링 시 카메라 스트림이 재시작되어 깜빡이는 현상 완벽 방지)
+// 우측 상단 전면 카메라 PIP (LiveKit 로컬 카메라 트랙 우선 재사용으로 중복 getUserMedia 및 깜빡임 원천 방지)
 const ChildFrontCameraPip = React.memo(function ChildFrontCameraPip({
   videoEnabled,
   childName,
   videoRef,
+  externalVideoTrack,
   onPermissionDenied,
 }: {
   videoEnabled: boolean;
   childName: string;
   videoRef: React.MutableRefObject<HTMLVideoElement | null>;
+  externalVideoTrack?: MediaStreamTrack | null;
   onPermissionDenied: () => void;
 }) {
   const [hasCamera, setHasCamera] = useState(false);
@@ -229,6 +230,16 @@ const ChildFrontCameraPip = React.memo(function ChildFrontCameraPip({
       if (videoRef.current) {
         videoRef.current.srcObject = null;
       }
+      return;
+    }
+
+    // LiveKit이 발행 중인 전면 카메라 트랙이 있으면 중복 getUserMedia 없이 그대로 렌더링
+    if (externalVideoTrack && externalVideoTrack.readyState === "live") {
+      if (videoRef.current) {
+        videoRef.current.srcObject = new MediaStream([externalVideoTrack]);
+        videoRef.current.play().catch(() => {});
+      }
+      setHasCamera(true);
       return;
     }
 
@@ -260,7 +271,7 @@ const ChildFrontCameraPip = React.memo(function ChildFrontCameraPip({
       cancelled = true;
       activeStream?.getTracks().forEach((t) => t.stop());
     };
-  }, [videoEnabled, videoRef]);
+  }, [videoEnabled, externalVideoTrack, videoRef]);
 
   if (!videoEnabled) return null;
 
@@ -303,10 +314,12 @@ function LiveKitActiveStage({
   onRemoteEndCall,
   onProvideChatSender,
   onLocalMicTrack,
+  onLocalCamTrack,
   onRemoteAudioTracks,
   onAudioPlaybackBlocked,
   onProvideAudioUnlocker,
   micEnabled,
+  camEnabled,
 }: {
   onAvatarReady: (hasVideo: boolean) => void;
   onRemoteReport: (payload: Record<string, unknown>) => void;
@@ -315,12 +328,15 @@ function LiveKitActiveStage({
   onRemoteEndCall: () => void;
   onProvideChatSender: (sender: ((text: string) => void) | null) => void;
   onLocalMicTrack: (track: MediaStreamTrack | null) => void;
+  onLocalCamTrack: (track: MediaStreamTrack | null) => void;
   onRemoteAudioTracks: (tracks: MediaStreamTrack[]) => void;
   onAudioPlaybackBlocked: (blocked: boolean) => void;
   onProvideAudioUnlocker: (unlocker: (() => void) | null) => void;
   micEnabled: boolean;
+  camEnabled: boolean;
 }) {
   const room = useRoomContext();
+  const avatarVideoElRef = useRef<HTMLVideoElement | null>(null);
   const tracks = useTracks(
     [
       Track.Source.Camera,
@@ -332,12 +348,27 @@ function LiveKitActiveStage({
   );
   const { localParticipant } = useLocalParticipant();
 
-  // 브라우저 자동재생 정책으로 원격 오디오가 잠기지 않도록 room.startAudio() 자동/수동 해제 연동
+  // iOS Safari 17+ / 모바일 브라우저 스피커폰(play-and-record) 라우팅 및 자동재생 잠금 해제
   useEffect(() => {
+    const forceSpeakerphoneSession = () => {
+      try {
+        const navWithSession = navigator as unknown as {
+          audioSession?: { type: string };
+        };
+        if (navWithSession.audioSession) {
+          navWithSession.audioSession.type = "play-and-record";
+        }
+      } catch {
+        // ignore
+      }
+    };
+
     const syncPlaybackState = () => {
       onAudioPlaybackBlocked(!room.canPlaybackAudio);
     };
     const unlockAudio = () => {
+      forceSpeakerphoneSession();
+      avatarVideoElRef.current?.play().catch(() => {});
       room
         .startAudio()
         .then(() => {
@@ -377,6 +408,21 @@ function LiveKitActiveStage({
       .catch(() => {});
   }, [localParticipant, micEnabled]);
 
+  // WebRTC PeerConnection에 비디오 트랙도 함께 활성화하여 Android/iOS OS가 수화기(Earpiece) 대신 하단 메인 스피커폰(VideoChat Loudspeaker)으로 출력하도록 강제
+  useEffect(() => {
+    localParticipant
+      .setCameraEnabled(
+        camEnabled,
+        camEnabled
+          ? {
+              facingMode: "user",
+              resolution: { width: 320, height: 420, frameRate: 15 },
+            }
+          : undefined
+      )
+      .catch(() => {});
+  }, [localParticipant, camEnabled]);
+
   useEffect(() => {
     const sendFn = (text: string) => {
       try {
@@ -392,15 +438,60 @@ function LiveKitActiveStage({
     return () => onProvideChatSender(null);
   }, [localParticipant, onProvideChatSender]);
 
-  const remoteAvatarTrack = tracks.find(
-    (t) => !t.participant.isLocal && t.publication?.kind === Track.Kind.Video
-  );
+  // 실제 구독 완료된 원격 아바타 비디오 트랙만 추출하여 muted + playsInline + autoPlay <video>에 직접 바인딩
+  // (Simli처럼 4~5초 뒤 트랙이 도착해도 모바일 자동재생 차단에 걸리지 않고 첫 프레임 디코딩 완료 즉시 표시됨)
+  const subscribedAvatarVideoTrack =
+    tracks.find(
+      (t) =>
+        !t.participant.isLocal &&
+        t.publication?.kind === Track.Kind.Video &&
+        t.publication?.isSubscribed &&
+        Boolean(t.publication?.track)
+    )?.publication?.track ?? null;
 
   useEffect(() => {
-    onAvatarReady(Boolean(remoteAvatarTrack));
-  }, [remoteAvatarTrack, onAvatarReady]);
+    const el = avatarVideoElRef.current;
+    if (!subscribedAvatarVideoTrack || !el) {
+      onAvatarReady(false);
+      return;
+    }
 
-  // LiveKit이 관리하는 단일 로컬 마이크 트랙 및 원격 오디오 트랙을 상위(클론 분석/녹화용)로 전달
+    let cancelled = false;
+    const markIfDecoded = () => {
+      if (!cancelled && el.videoWidth > 0 && el.readyState >= 2) {
+        onAvatarReady(true);
+      }
+    };
+
+    subscribedAvatarVideoTrack.attach(el);
+    el.muted = true;
+    el.playsInline = true;
+    el.play().then(markIfDecoded).catch(() => {});
+
+    el.addEventListener("loadeddata", markIfDecoded);
+    el.addEventListener("playing", markIfDecoded);
+    const framePoll = setInterval(() => {
+      if (el.paused) {
+        el.play().catch(() => {});
+      }
+      markIfDecoded();
+    }, 150);
+
+    return () => {
+      cancelled = true;
+      clearInterval(framePoll);
+      el.removeEventListener("loadeddata", markIfDecoded);
+      el.removeEventListener("playing", markIfDecoded);
+      try {
+        subscribedAvatarVideoTrack.detach(el);
+      } catch {
+        // ignore
+      }
+      onAvatarReady(false);
+    };
+  }, [subscribedAvatarVideoTrack, onAvatarReady]);
+
+  // LiveKit이 관리하는 단일 로컬 마이크/카메라 트랙 및 원격 오디오 트랙을 상위 컴포넌트로 전달
   const localMicMediaTrack =
     tracks.find((t) => t.participant.isLocal && t.publication?.kind === Track.Kind.Audio)
       ?.publication?.track?.mediaStreamTrack ?? null;
@@ -409,6 +500,15 @@ function LiveKitActiveStage({
     onLocalMicTrack(localMicMediaTrack);
     return () => onLocalMicTrack(null);
   }, [localMicMediaTrack, onLocalMicTrack]);
+
+  const localCamMediaTrack =
+    tracks.find((t) => t.participant.isLocal && t.publication?.kind === Track.Kind.Video)
+      ?.publication?.track?.mediaStreamTrack ?? null;
+
+  useEffect(() => {
+    onLocalCamTrack(localCamMediaTrack);
+    return () => onLocalCamTrack(null);
+  }, [localCamMediaTrack, onLocalCamTrack]);
 
   const remoteAudioMediaTracks = tracks
     .filter((t) => !t.participant.isLocal && t.publication?.kind === Track.Kind.Audio)
@@ -469,14 +569,15 @@ function LiveKitActiveStage({
     onRemoteEndCall();
   });
 
-  if (!remoteAvatarTrack) {
-    return null;
-  }
-
   return (
-    <VideoTrack
-      trackRef={remoteAvatarTrack}
-      className="w-full h-full object-cover"
+    <video
+      ref={avatarVideoElRef}
+      autoPlay
+      playsInline
+      muted
+      className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${
+        subscribedAvatarVideoTrack ? "opacity-100" : "opacity-0"
+      }`}
     />
   );
 }
@@ -511,6 +612,9 @@ export default function CallPage() {
   const [micPermissionState, setMicPermissionState] = useState<"prompt" | "granted" | "denied">("prompt");
   const [camPermissionWarning, setCamPermissionWarning] = useState(false);
   const [audioPlaybackBlocked, setAudioPlaybackBlocked] = useState(false);
+  const [localCamTrack, setLocalCamTrack] = useState<MediaStreamTrack | null>(null);
+  const [speakerBoostEnabled, setSpeakerBoostEnabled] = useState(true);
+  const [speakerWebAudioReady, setSpeakerWebAudioReady] = useState(false);
 
   const [elapsedSec, setElapsedSec] = useState(0);
   const [santaSpeaking, setSantaSpeaking] = useState(false);
@@ -526,6 +630,8 @@ export default function CallPage() {
 
   const livekitChatSenderRef = useRef<((text: string) => void) | null>(null);
   const unlockRoomAudioRef = useRef<(() => void) | null>(null);
+  const speakerGainNodeRef = useRef<GainNode | null>(null);
+  const speakerBoostEnabledRef = useRef(true);
   const stageContainerRef = useRef<HTMLDivElement | null>(null);
   const childPipVideoRef = useRef<HTMLVideoElement | null>(null);
   const talkingLoopVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -635,6 +741,18 @@ export default function CallPage() {
       setMicPermissionState("granted");
     }
   }, []);
+
+  const handleLocalCamTrack = useCallback((track: MediaStreamTrack | null) => {
+    setLocalCamTrack(track);
+  }, []);
+
+  // 스피커폰 볼륨 증폭 토글 시 WebAudio GainNode에 즉시 반영 (MAX: 2.6배 / 표준: 1.15배)
+  useEffect(() => {
+    speakerBoostEnabledRef.current = speakerBoostEnabled;
+    if (speakerGainNodeRef.current) {
+      speakerGainNodeRef.current.gain.value = speakerBoostEnabled ? 2.6 : 1.15;
+    }
+  }, [speakerBoostEnabled]);
 
   const handleRemoteAudioTracks = useCallback((tracks: MediaStreamTrack[]) => {
     remoteAudioTracksRef.current = tracks;
@@ -1104,7 +1222,11 @@ export default function CallPage() {
         (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
 
       if (AudioCtx) {
-        audioCtx = new AudioCtx();
+        try {
+          audioCtx = new AudioCtx({ latencyHint: "playback" });
+        } catch {
+          audioCtx = new AudioCtx();
+        }
         // 모바일(iOS Safari / Android Chrome)에서 자동 suspended 방지: 즉시 resume 및 사용자 제스처 시 재시도
         resumeAudioContext = () => {
           if (audioCtx && audioCtx.state === "suspended") {
@@ -1116,6 +1238,34 @@ export default function CallPage() {
         window.addEventListener("touchstart", resumeAudioContext, { passive: true });
 
         const dest = audioCtx.createMediaStreamDestination();
+
+        // 스마트폰 하단 스피커폰(Loudspeaker) 음량 극대화를 위한 방송급 마스터링 증폭 체인:
+        // Highpass(95Hz 저역 럼블 제거) -> Presence EQ(2.6kHz 음성 명료도 +4.5dB) -> Compressor(피크 클리핑 방지) -> Gain(2.6x 증폭) -> 스피커 출력
+        const speakerHighpass = audioCtx.createBiquadFilter();
+        speakerHighpass.type = "highpass";
+        speakerHighpass.frequency.value = 95;
+
+        const speakerPresenceEq = audioCtx.createBiquadFilter();
+        speakerPresenceEq.type = "peaking";
+        speakerPresenceEq.frequency.value = 2600;
+        speakerPresenceEq.Q.value = 1.0;
+        speakerPresenceEq.gain.value = 4.5;
+
+        const speakerCompressor = audioCtx.createDynamicsCompressor();
+        speakerCompressor.threshold.value = -22;
+        speakerCompressor.knee.value = 12;
+        speakerCompressor.ratio.value = 8;
+        speakerCompressor.attack.value = 0.002;
+        speakerCompressor.release.value = 0.14;
+
+        const speakerGain = audioCtx.createGain();
+        speakerGain.gain.value = speakerBoostEnabledRef.current ? 2.6 : 1.15;
+        speakerGainNodeRef.current = speakerGain;
+
+        speakerHighpass.connect(speakerPresenceEq);
+        speakerPresenceEq.connect(speakerCompressor);
+        speakerCompressor.connect(speakerGain);
+        speakerGain.connect(audioCtx.destination);
 
         // 무음 오실레이터로 오디오 트랙 클럭 유지
         const silentOsc = audioCtx.createOscillator();
@@ -1142,6 +1292,7 @@ export default function CallPage() {
         let lastChildVoiceAt = 0;
         let prevSpeaking = latestStateRef.current.santaSpeaking;
         let prevMotionState = latestStateRef.current.santaMotionState;
+        let prevWebAudioReady = false;
 
         const syncClonedAudioAndAnalyze = () => {
           const activeAudioCtx = audioCtx;
@@ -1150,7 +1301,7 @@ export default function CallPage() {
             activeAudioCtx.resume().catch(() => {});
           }
 
-          // 1. LiveKit 원격 오디오 트랙 클론 동기화 (<RoomAudioRenderer> 원본 스피커 출력과 100% 분리)
+          // 1. LiveKit 원격 오디오 트랙 클론 동기화 (스피커폰 마스터링 증폭기 + 녹화 믹서 + 모션 분석기 동시 구동)
           const liveRemoteTracks = remoteAudioTracksRef.current.filter(
             (t) => t.readyState === "live"
           );
@@ -1180,11 +1331,19 @@ export default function CallPage() {
               const remoteSource = activeAudioCtx.createMediaStreamSource(clonedStream);
               remoteSource.connect(dest);
               remoteSource.connect(remoteAnalyser);
+              remoteSource.connect(speakerHighpass);
               clonedRemoteMap.set(track.id, { clone, source: remoteSource });
             } catch {
               // ignore
             }
           });
+
+          const nextWebAudioReady =
+            activeAudioCtx.state === "running" && clonedRemoteMap.size > 0;
+          if (nextWebAudioReady !== prevWebAudioReady) {
+            prevWebAudioReady = nextWebAudioReady;
+            setSpeakerWebAudioReady(nextWebAudioReady);
+          }
 
           // 2. LiveKit 로컬 마이크 트랙 클론 동기화 (이중 getUserMedia 없이 단일 AEC 마이크 트랙 공유)
           const liveMic =
@@ -1342,6 +1501,8 @@ export default function CallPage() {
         }
       }
       cleanupClonedTracks();
+      speakerGainNodeRef.current = null;
+      setSpeakerWebAudioReady(false);
       if (audioCtx) {
         audioCtx.close().catch(() => {});
       }
@@ -1562,7 +1723,7 @@ export default function CallPage() {
         callPhase === "ending" ? "opacity-0" : "opacity-100"
       }`}
     >
-      {/* LiveKit WebRTC 세션 */}
+      {/* LiveKit WebRTC 세션 (video 트랙 함께 활성화하여 모바일 수화기 대신 하단 스피커폰 라우팅 강제) */}
       {connDetails && !connDetails.demoMode && (
         <LiveKitRoom
           serverUrl={connDetails.serverUrl}
@@ -1577,11 +1738,19 @@ export default function CallPage() {
                 }
               : false
           }
-          video={false}
+          video={
+            camEnabled
+              ? {
+                  facingMode: "user",
+                  resolution: { width: 320, height: 420, frameRate: 15 },
+                }
+              : false
+          }
           onMediaDeviceFailure={handleMediaDeviceFailure}
-          className="absolute inset-0 z-10 pointer-events-none"
+          className="absolute inset-0 w-full h-full z-10 pointer-events-none"
         >
-          <RoomAudioRenderer />
+          {/* WebAudio 스피커폰 증폭기가 구동 중일 때는 volume=0으로 중복 위상 간섭만 막고 서버 오디오 패킷 수신은 100% 유지 */}
+          <RoomAudioRenderer volume={speakerWebAudioReady ? 0 : 1} />
           <LiveKitActiveStage
             onAvatarReady={setHasRemoteAvatarVideo}
             onRemoteReport={handleRemoteReport}
@@ -1590,10 +1759,12 @@ export default function CallPage() {
             onRemoteEndCall={handleRemoteEndCall}
             onProvideChatSender={handleProvideChatSender}
             onLocalMicTrack={handleLocalMicTrack}
+            onLocalCamTrack={handleLocalCamTrack}
             onRemoteAudioTracks={handleRemoteAudioTracks}
             onAudioPlaybackBlocked={setAudioPlaybackBlocked}
             onProvideAudioUnlocker={handleProvideAudioUnlocker}
             micEnabled={micEnabled && micPermissionState !== "denied"}
+            camEnabled={camEnabled}
           />
         </LiveKitRoom>
       )}
@@ -1761,12 +1932,39 @@ export default function CallPage() {
               </span>
             </div>
 
-            {detectedGifts.length > 0 && callPhase === "connected" && (
-              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#111827]/85 backdrop-blur-md border border-[#D4AF37]/40">
-                <Gift className="w-3.5 h-3.5 text-[#D4AF37] shrink-0" />
-                <span className="text-[11px] text-[#F9F6F0]/90 font-medium truncate max-w-[180px]">
-                  {detectedGifts[0]}
-                </span>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {/* 스피커폰 볼륨 증폭 원터치 토글 (기본 MAX 2.6배 증폭 켜짐) */}
+              {callPhase === "connected" && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    unlockRoomAudioRef.current?.();
+                    setSpeakerBoostEnabled((v) => !v);
+                  }}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold border transition active:scale-95 ${
+                    speakerBoostEnabled
+                      ? "bg-[#D4AF37]/20 border-[#D4AF37]/70 text-[#F9F6F0] shadow-[0_0_12px_rgba(212,175,55,0.25)]"
+                      : "bg-[#111827]/85 border-white/15 text-[#F9F6F0]/75"
+                  }`}
+                >
+                  <Volume2 className="w-3.5 h-3.5 text-[#D4AF37] shrink-0" />
+                  <span>{speakerBoostEnabled ? "스피커폰 MAX 켜짐" : "스피커폰 표준"}</span>
+                </button>
+              )}
+
+              {detectedGifts.length > 0 && callPhase === "connected" && (
+                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#111827]/85 backdrop-blur-md border border-[#D4AF37]/40">
+                  <Gift className="w-3.5 h-3.5 text-[#D4AF37] shrink-0" />
+                  <span className="text-[11px] text-[#F9F6F0]/90 font-medium truncate max-w-[160px]">
+                    {detectedGifts[0]}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {avatarMode === "simli" && callPhase === "connected" && hasRemoteAvatarVideo && (
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-[#111827]/85 border border-white/15 text-[10px] text-[#F9F6F0]/75 max-w-[235px]">
+                <span>💡 Simli 대시보드에 산타 이미지 등록 전 기본 테스트 얼굴이 표시됩니다</span>
               </div>
             )}
           </div>
@@ -1776,6 +1974,7 @@ export default function CallPage() {
             videoEnabled={camEnabled}
             childName={displayName || "나"}
             videoRef={childPipVideoRef}
+            externalVideoTrack={localCamTrack}
             onPermissionDenied={handleCamPermissionDenied}
           />
         </div>

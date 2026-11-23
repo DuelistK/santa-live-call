@@ -16,6 +16,14 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* LiveKit 컨테이너가 항상 전체 스테이지 높이와 너비를 100% 채우도록 강제 (모바일 아바타 비디오 0px 방지) */
+.lk-room-container {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
 /* 세련된 샴페인 골드 스크롤바 */
 ::-webkit-scrollbar {
   width: 4px;
