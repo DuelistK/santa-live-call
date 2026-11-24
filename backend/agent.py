@@ -137,6 +137,7 @@ class SecretSantaNote:
     mission: str = "밤에 일찍 자고 양치질을 깨끗이 하기"
     giftHint: str = "특별한 크리스마스 선물"
     avatarProvider: str = ""
+    voicePreset: str = "george"
     previousCallCount: int = 0
     lastPromise: str = ""
     lastGifts: str = ""
@@ -170,6 +171,7 @@ class SecretSantaNote:
                 "mission",
                 "giftHint",
                 "avatarProvider",
+                "voicePreset",
                 "previousCallCount",
                 "lastPromise",
                 "lastGifts",
@@ -195,6 +197,7 @@ class SecretSantaNote:
             mission=str(data.get("mission") or cls.mission).strip(),
             giftHint=str(data.get("giftHint") or cls.giftHint).strip(),
             avatarProvider=str(data.get("avatarProvider") or "").strip(),
+            voicePreset=str(data.get("voicePreset") or cls.voicePreset).strip().lower(),
             previousCallCount=prev_count,
             lastPromise=str(data.get("lastPromise") or "").strip(),
             lastGifts=str(data.get("lastGifts") or "").strip(),
@@ -630,6 +633,79 @@ async def extract_gift_keywords_in_background(
 
 
 # =====================================================================
+# 5-B. 실제 성우 보이스 프리셋 & ElevenLabs 구독 티어 자동 감지 (방법 2)
+# =====================================================================
+PREMADE_REAL_ACTOR_VOICES: dict[str, str] = {
+    "george": "JBFqnCBsd6RMkjVDRZzb",  # George - 따뜻한 동화구연 실제 성우 (무료/유료 즉시 작동)
+    "bill": "pqHfZKP75CvOlQylNhV4",    # Bill - 인자한 노년 남성 실제 성우 (무료/유료 즉시 작동)
+    "brian": "nPczCjzI2devNBz1zQrb",   # Brian - 깊고 중후한 중저음 실제 성우 (무료/유료 즉시 작동)
+}
+
+KOREAN_LIBRARY_ACTOR_VOICES: dict[str, tuple[str, str]] = {
+    # (라이브러리 성우 Voice ID, 무료 플랜일 때 402 방지용 폴백 성우 Voice ID)
+    "namchun": ("5ON5Fnz24cnOozEQfGAm", "JBFqnCBsd6RMkjVDRZzb"),  # 남춘 할아버지 (한국인 노년 전문 성우)
+    "sungho": ("AgA5UKT9OrVg7jxVBZd4", "pqHfZKP75CvOlQylNhV4"),   # 성호 시니어 (한국인 중노년 성우)
+}
+
+_elevenlabs_tier_cache: tuple[float, str] = (0.0, "")
+
+
+async def resolve_elevenlabs_voice_id(voice_preset: str, api_key: Optional[str]) -> str:
+    """
+    프론트엔드에서 선택한 성우 프리셋(또는 .env 커스텀 보이스 클론 ID)을 실제 Voice ID로 변환합니다.
+    - 남춘(namchun)/성호(sungho) 등 한국어 라이브러리 성우는 Starter($5/월) 이상에서 즉시 활성화되며,
+      무료(free) 플랜일 때는 402 에러 대신 실제 성우 프리메이드 보이스(George/Bill)로 안전하게 폴백합니다.
+    """
+    global _elevenlabs_tier_cache
+
+    preset = (voice_preset or "").strip().lower()
+    env_vid = os.getenv("ELEVENLABS_VOICE_ID", "").strip()
+
+    if preset in PREMADE_REAL_ACTOR_VOICES:
+        return PREMADE_REAL_ACTOR_VOICES[preset]
+
+    if preset in KOREAN_LIBRARY_ACTOR_VOICES:
+        target_vid, free_fallback_vid = KOREAN_LIBRARY_ACTOR_VOICES[preset]
+        if not api_key:
+            return free_fallback_vid
+
+        now = time.monotonic()
+        cached_at, cached_tier = _elevenlabs_tier_cache
+        if not cached_tier or (now - cached_at) > 60.0:
+            try:
+                import aiohttp
+
+                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=3.5)) as s:
+                    async with s.get(
+                        "https://api.elevenlabs.io/v1/user/subscription",
+                        headers={"xi-api-key": api_key},
+                    ) as resp:
+                        if resp.status == 200:
+                            sub_data = await resp.json()
+                            cached_tier = str(sub_data.get("tier") or "free").lower()
+                            _elevenlabs_tier_cache = (now, cached_tier)
+            except Exception as exc:
+                logger.debug("Subscription tier check skipped: %s", exc)
+
+        if cached_tier and cached_tier != "free":
+            logger.info("Paid ElevenLabs tier (%s) active — using Korean voice '%s' (%s)", cached_tier, preset, target_vid)
+            return target_vid
+
+        logger.info(
+            "ElevenLabs free tier detected — falling back from library voice '%s' to real actor voice (%s) to avoid HTTP 402.",
+            preset,
+            free_fallback_vid,
+        )
+        return free_fallback_vid
+
+    # .env에 사용자가 직접 Instant Voice Clone ID를 넣은 경우 우선 사용 (이전 합성 generated 보이스 제외)
+    if env_vid and not env_vid.startswith("your_") and env_vid != "VXR4iyFwKyoxxANCRsD5":
+        return env_vid
+
+    return PREMADE_REAL_ACTOR_VOICES["george"]
+
+
+# =====================================================================
 # 6. LiveKit Agent Entrypoint
 # =====================================================================
 async def wait_for_child_note(ctx: JobContext) -> SecretSantaNote:
@@ -701,15 +777,10 @@ async def entrypoint(ctx: JobContext) -> None:
         llm_kwargs["thinking_config"] = {"thinking_level": "MINIMAL"}
     llm_engine = google.LLM(**llm_kwargs)
 
-    # - TTS: ElevenLabs 최고 음질 다국어 성우 모델(eleven_multilingual_v2) + 자연스러운 구연동화 억양 세팅
-    # (stability=0.64, style=0.18로 평탄한 낭독조를 없애고 푸근한 할아버지 감정선과 호흡을 살립니다.)
+    # - TTS: 실제 인간 성우 보이스(George / Bill / Brian / 한국인 할아버지 성우 남춘·성호) + 다국어 성우 모델(eleven_multilingual_v2)
     eleven_api_key = os.getenv("ELEVENLABS_API_KEY") or os.getenv("ELEVEN_API_KEY")
-    raw_voice_id = os.getenv("ELEVENLABS_VOICE_ID", "").strip()
-    voice_id = (
-        raw_voice_id
-        if raw_voice_id and not raw_voice_id.startswith("your_")
-        else "pNInz6obpgDQGcFmaJgB"
-    )
+    voice_id = await resolve_elevenlabs_voice_id(note.voicePreset, eleven_api_key)
+    logger.info("Selected ElevenLabs voice_id=%s (preset='%s')", voice_id, note.voicePreset)
     eleven_model = os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2").strip()
     tts_kwargs: dict[str, Any] = {
         "api_key": eleven_api_key,

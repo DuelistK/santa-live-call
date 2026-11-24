@@ -16,6 +16,7 @@ export async function POST(req: NextRequest) {
       mission: (body.mission || "밤 9시 전에 스스로 잠자리에 들기").trim(),
       giftHint: (body.giftHint || "크리스마스 깜짝 선물").trim(),
       avatarProvider: body.avatarProvider || "anam",
+      voicePreset: body.voicePreset || "george",
       previousMemory: body.previousMemory,
     };
 
@@ -51,6 +52,7 @@ export async function POST(req: NextRequest) {
       mission: metadata.mission,
       giftHint: metadata.giftHint,
       avatarProvider: metadata.avatarProvider || "anam",
+      voicePreset: metadata.voicePreset || "george",
     };
 
     if (metadata.previousMemory) {

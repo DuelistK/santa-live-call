@@ -16,6 +16,7 @@ export const DEFAULT_SANTA_NOTE: SecretSantaNote = {
   mission: "밤에 일찍 잠자리에 들고 스스로 깨끗이 양치질하기",
   giftHint: "크리스마스 깜짝 선물",
   avatarProvider: "anam",
+  voicePreset: "george",
 };
 
 export const DEFAULT_SANTA_REPORT: SantaReportData = {

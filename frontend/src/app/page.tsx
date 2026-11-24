@@ -18,9 +18,11 @@ import {
   Trash2,
   BrainCircuit,
   PencilLine,
+  Volume2,
+  Square,
 } from "lucide-react";
 import { useSantaSession } from "@/context/SantaSessionContext";
-import { SantaAvatarMode, SecretSantaNote } from "@/types/santa";
+import { SantaAvatarMode, SantaVoicePreset, SecretSantaNote } from "@/types/santa";
 import {
   NorthPoleBackdrop,
   SantaSnowglobePortal,
@@ -117,6 +119,56 @@ const AVATAR_MODE_OPTIONS: Array<{
   },
 ];
 
+const SANTA_VOICE_OPTIONS: Array<{
+  preset: SantaVoicePreset;
+  shortLabel: string;
+  title: string;
+  desc: string;
+  badge: string;
+  sampleUrl: string;
+}> = [
+  {
+    preset: "george",
+    shortLabel: "조지 (동화성우)",
+    title: "조지 · 따뜻한 동화구연 성우",
+    desc: "실제 성우 녹음 · 포근한 구연동화 톤 (무료 즉시 작동)",
+    badge: "무료 추천",
+    sampleUrl: "/audio/voice-george.mp3",
+  },
+  {
+    preset: "bill",
+    shortLabel: "빌 (원로성우)",
+    title: "빌 · 인자한 노년 원로 성우",
+    desc: "실제 시니어 성우 녹음 · 차분한 할아버지 톤 (무료 즉시 작동)",
+    badge: "무료 시니어",
+    sampleUrl: "/audio/voice-bill.mp3",
+  },
+  {
+    preset: "brian",
+    shortLabel: "브라이언 (중저음)",
+    title: "브라이언 · 깊고 중후한 중저음",
+    desc: "실제 바리톤 성우 녹음 · 묵직한 울림 (무료 즉시 작동)",
+    badge: "무료 저음",
+    sampleUrl: "/audio/voice-brian.mp3",
+  },
+  {
+    preset: "namchun",
+    shortLabel: "남춘 (한국할아버지)",
+    title: "남춘 · 한국인 할아버지 전문성우",
+    desc: "검증된 한국인 노년 성우 (Starter $5 업그레이드 시 실통화 자동 활성)",
+    badge: "한국성우 ⭐",
+    sampleUrl: "/audio/voice-namchun.mp3",
+  },
+  {
+    preset: "sungho",
+    shortLabel: "성호 (한국시니어)",
+    title: "성호 · 한국인 시니어 성우",
+    desc: "차분한 한국인 중노년 성우 (Starter $5 업그레이드 시 실통화 자동 활성)",
+    badge: "한국시니어",
+    sampleUrl: "/audio/voice-sungho.mp3",
+  },
+];
+
 // 북극 황금 왁스실(Wax Seal) 비밀 편지 봉투 그래픽 아이콘
 function GoldWaxEnvelopeBadge() {
   return (
@@ -177,8 +229,34 @@ export default function HomePage() {
   const [showStampModal, setShowStampModal] = useState(false);
   const [showIncomingPicker, setShowIncomingPicker] = useState(false);
   const [draft, setDraft] = useState<SecretSantaNote>(note);
+  const [playingVoicePreset, setPlayingVoicePreset] = useState<SantaVoicePreset | null>(null);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
   const praiseInputRef = useRef<HTMLInputElement | null>(null);
   const missionInputRef = useRef<HTMLInputElement | null>(null);
+
+  const toggleVoiceSample = (preset: SantaVoicePreset, sampleUrl: string) => {
+    if (typeof window === "undefined") return;
+    if (previewAudioRef.current) {
+      previewAudioRef.current.pause();
+      previewAudioRef.current = null;
+    }
+    if (playingVoicePreset === preset) {
+      setPlayingVoicePreset(null);
+      return;
+    }
+    const audio = new window.Audio(sampleUrl);
+    previewAudioRef.current = audio;
+    setPlayingVoicePreset(preset);
+    audio.onended = () => setPlayingVoicePreset(null);
+    audio.onerror = () => setPlayingVoicePreset(null);
+    audio.play().catch(() => setPlayingVoicePreset(null));
+  };
+
+  useEffect(() => {
+    return () => {
+      previewAudioRef.current?.pause();
+    };
+  }, []);
 
   const isCustomPraise = Boolean(
     draft.praise.trim() &&
@@ -248,6 +326,7 @@ export default function HomePage() {
       mission: draft.mission.trim() || "밤 9시 전에 스스로 잠자리에 들기",
       giftHint: draft.giftHint.trim() || "크리스마스 깜짝 선물",
       avatarProvider: draft.avatarProvider || "anam",
+      voicePreset: draft.voicePreset || "george",
     };
     setNote(cleaned);
     setIsSheetOpen(false);
@@ -404,6 +483,75 @@ export default function HomePage() {
                 </button>
               );
             })}
+          </div>
+
+          {/* 실제 성우 보이스 선택 + 원터치 샘플 미리듣기 바 */}
+          <div className="pt-1.5 mt-1 border-t border-white/10 space-y-1.5">
+            <div className="flex items-center justify-between px-1">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-[#E5C158]">
+                🎙️ 산타 성우 목소리 선택 (미리듣기 지원)
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  const cur =
+                    SANTA_VOICE_OPTIONS.find(
+                      (v) => v.preset === (note.voicePreset || "george")
+                    ) || SANTA_VOICE_OPTIONS[0];
+                  toggleVoiceSample(cur.preset, cur.sampleUrl);
+                }}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#E5C158]/20 hover:bg-[#E5C158]/30 border border-[#E5C158]/50 text-[10px] font-bold text-[#F3DC99] transition active:scale-95"
+              >
+                {playingVoicePreset === (note.voicePreset || "george") ? (
+                  <>
+                    <Square className="w-2.5 h-2.5 fill-current" />
+                    <span>정지</span>
+                  </>
+                ) : (
+                  <>
+                    <Volume2 className="w-3 h-3" />
+                    <span>선택 목소리 미리듣기</span>
+                  </>
+                )}
+              </button>
+            </div>
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
+              {SANTA_VOICE_OPTIONS.map((v) => {
+                const active = (note.voicePreset || "george") === v.preset;
+                return (
+                  <button
+                    key={v.preset}
+                    type="button"
+                    onClick={() => {
+                      setNote({ ...note, voicePreset: v.preset });
+                      toggleVoiceSample(v.preset, v.sampleUrl);
+                    }}
+                    className={`py-1.5 px-2.5 rounded-xl text-center shrink-0 transition active:scale-95 ${
+                      active
+                        ? "bg-[#E5C158] text-[#080E1E] font-extrabold shadow-[0_0_12px_rgba(229,193,88,0.35)]"
+                        : "bg-[#0A1020]/80 text-[#FAF7F2]/75 hover:text-white border border-white/10 font-semibold"
+                    }`}
+                  >
+                    <div className="text-[11px] leading-tight whitespace-nowrap">
+                      {v.shortLabel}
+                    </div>
+                    <div
+                      className={`text-[9px] mt-0.5 whitespace-nowrap ${
+                        active ? "text-[#080E1E]/80 font-bold" : "text-[#E5C158]/80"
+                      }`}
+                    >
+                      {v.badge}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+            {((note.voicePreset || "george") === "namchun" ||
+              (note.voicePreset || "george") === "sungho") && (
+              <p className="px-1 text-[10px] text-[#F3DC99]/85 leading-snug">
+                💡 남춘·성호 한국인 성우는 계정에 등록 완료되었으며, ElevenLabs Starter($5/월) 플랜에서 실통화 API가 즉시 켜집니다(무료 플랜에서는 조지/빌 실제 성우로 자동 연결).
+              </p>
+            )}
           </div>
         </div>
 
@@ -916,6 +1064,64 @@ export default function HomePage() {
                         {opt.desc}
                       </p>
                     </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* 6. 산타 성우 보이스 선택 (실제 성우 프리셋 + 미리듣기) */}
+            <div>
+              <label className="flex items-center justify-between text-xs font-semibold text-[#FAF7F2]/80 mb-2">
+                <span>🎙️ 산타 성우 목소리 선택</span>
+                <span className="text-[10px] text-[#E5C158] font-bold">
+                  클릭 시 샘플 음성 재생
+                </span>
+              </label>
+              <div className="space-y-1.5">
+                {SANTA_VOICE_OPTIONS.map((v) => {
+                  const selected = (draft.voicePreset || "george") === v.preset;
+                  return (
+                    <div
+                      key={v.preset}
+                      onClick={() => {
+                        setDraft({ ...draft, voicePreset: v.preset });
+                        toggleVoiceSample(v.preset, v.sampleUrl);
+                      }}
+                      className={`p-2.5 rounded-2xl border cursor-pointer flex items-center justify-between gap-2 transition active:scale-[0.99] ${
+                        selected
+                          ? "bg-[#E5C158]/18 border-[#E5C158] text-[#FAF7F2]"
+                          : "bg-[#141D32]/90 border-white/12 text-[#FAF7F2]/75 hover:border-white/25"
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs font-extrabold text-[#FAF7F2]">
+                            {v.title}
+                          </span>
+                          <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[#E5C158]/20 text-[#F3DC99] font-bold">
+                            {v.badge}
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-[#FAF7F2]/60 mt-0.5">
+                          {v.desc}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleVoiceSample(v.preset, v.sampleUrl);
+                        }}
+                        className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-[#E5C158] shrink-0"
+                        aria-label={`${v.title} 미리듣기`}
+                      >
+                        {playingVoicePreset === v.preset ? (
+                          <Square className="w-3 h-3 fill-current" />
+                        ) : (
+                          <Volume2 className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                    </div>
                   );
                 })}
               </div>
