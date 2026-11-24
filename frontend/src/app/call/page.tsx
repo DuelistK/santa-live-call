@@ -746,11 +746,11 @@ export default function CallPage() {
     setLocalCamTrack(track);
   }, []);
 
-  // 스피커폰 볼륨 증폭 토글 시 WebAudio GainNode에 즉시 반영 (MAX: 2.6배 / 표준: 1.15배)
+  // 스피커폰 볼륨 증폭 토글 시 WebAudio GainNode에 즉시 반영 (MAX: 2.5배 / 표준: 1.15배)
   useEffect(() => {
     speakerBoostEnabledRef.current = speakerBoostEnabled;
     if (speakerGainNodeRef.current) {
-      speakerGainNodeRef.current.gain.value = speakerBoostEnabled ? 2.6 : 1.15;
+      speakerGainNodeRef.current.gain.value = speakerBoostEnabled ? 2.5 : 1.15;
     }
   }, [speakerBoostEnabled]);
 
@@ -1239,31 +1239,46 @@ export default function CallPage() {
 
         const dest = audioCtx.createMediaStreamDestination();
 
-        // 스마트폰 하단 스피커폰(Loudspeaker) 음량 극대화를 위한 방송급 마스터링 증폭 체인:
-        // Highpass(95Hz 저역 럼블 제거) -> Presence EQ(2.6kHz 음성 명료도 +4.5dB) -> Compressor(피크 클리핑 방지) -> Gain(2.6x 증폭) -> 스피커 출력
+        // 스마트폰 스피커폰 음량 극대화 + 푸근한 할아버지 중저음 온기(Warmth) 마스터링 체인:
+        // Highpass(62Hz 초저역 노이즈만 제거, 남성 기본 저음 보존) -> Warmth EQ(175Hz +3.8dB 중후한 가슴 울림)
+        // -> Presence EQ(2.2kHz +2.4dB 발음 명료도) -> De-Harshness Highshelf(6.2kHz -2.2dB 기계음 윤기 완화)
+        // -> Compressor -> Gain(2.5x 증폭) -> 스피커 출력
         const speakerHighpass = audioCtx.createBiquadFilter();
         speakerHighpass.type = "highpass";
-        speakerHighpass.frequency.value = 95;
+        speakerHighpass.frequency.value = 62;
+
+        const speakerWarmthEq = audioCtx.createBiquadFilter();
+        speakerWarmthEq.type = "peaking";
+        speakerWarmthEq.frequency.value = 175;
+        speakerWarmthEq.Q.value = 0.85;
+        speakerWarmthEq.gain.value = 3.8;
 
         const speakerPresenceEq = audioCtx.createBiquadFilter();
         speakerPresenceEq.type = "peaking";
-        speakerPresenceEq.frequency.value = 2600;
-        speakerPresenceEq.Q.value = 1.0;
-        speakerPresenceEq.gain.value = 4.5;
+        speakerPresenceEq.frequency.value = 2200;
+        speakerPresenceEq.Q.value = 0.9;
+        speakerPresenceEq.gain.value = 2.4;
+
+        const speakerSoftHighs = audioCtx.createBiquadFilter();
+        speakerSoftHighs.type = "highshelf";
+        speakerSoftHighs.frequency.value = 6200;
+        speakerSoftHighs.gain.value = -2.2;
 
         const speakerCompressor = audioCtx.createDynamicsCompressor();
-        speakerCompressor.threshold.value = -22;
-        speakerCompressor.knee.value = 12;
-        speakerCompressor.ratio.value = 8;
-        speakerCompressor.attack.value = 0.002;
-        speakerCompressor.release.value = 0.14;
+        speakerCompressor.threshold.value = -20;
+        speakerCompressor.knee.value = 14;
+        speakerCompressor.ratio.value = 6;
+        speakerCompressor.attack.value = 0.004;
+        speakerCompressor.release.value = 0.16;
 
         const speakerGain = audioCtx.createGain();
-        speakerGain.gain.value = speakerBoostEnabledRef.current ? 2.6 : 1.15;
+        speakerGain.gain.value = speakerBoostEnabledRef.current ? 2.5 : 1.15;
         speakerGainNodeRef.current = speakerGain;
 
-        speakerHighpass.connect(speakerPresenceEq);
-        speakerPresenceEq.connect(speakerCompressor);
+        speakerHighpass.connect(speakerWarmthEq);
+        speakerWarmthEq.connect(speakerPresenceEq);
+        speakerPresenceEq.connect(speakerSoftHighs);
+        speakerSoftHighs.connect(speakerCompressor);
         speakerCompressor.connect(speakerGain);
         speakerGain.connect(audioCtx.destination);
 

@@ -701,8 +701,8 @@ async def entrypoint(ctx: JobContext) -> None:
         llm_kwargs["thinking_config"] = {"thinking_level": "MINIMAL"}
     llm_engine = google.LLM(**llm_kwargs)
 
-    # - TTS: ElevenLabs 초저지연 Flash 모델(eleven_flash_v2_5) + auto_mode=False & 청크 스케줄 튜닝
-    # (목소리 톤 안정성과 급발진 방지를 유지하면서 첫 음성 송출 지연만 단축합니다.)
+    # - TTS: ElevenLabs 최고 음질 다국어 성우 모델(eleven_multilingual_v2) + 자연스러운 구연동화 억양 세팅
+    # (stability=0.64, style=0.18로 평탄한 낭독조를 없애고 푸근한 할아버지 감정선과 호흡을 살립니다.)
     eleven_api_key = os.getenv("ELEVENLABS_API_KEY") or os.getenv("ELEVEN_API_KEY")
     raw_voice_id = os.getenv("ELEVENLABS_VOICE_ID", "").strip()
     voice_id = (
@@ -710,21 +710,24 @@ async def entrypoint(ctx: JobContext) -> None:
         if raw_voice_id and not raw_voice_id.startswith("your_")
         else "pNInz6obpgDQGcFmaJgB"
     )
-    tts_engine = elevenlabs.TTS(
-        api_key=eleven_api_key,
-        voice_id=voice_id,
-        model="eleven_flash_v2_5",
-        language="ko",
-        voice_settings=elevenlabs.VoiceSettings(
-            stability=0.86,
-            similarity_boost=0.88,
-            style=0.0,
-            speed=0.90,
+    eleven_model = os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2").strip()
+    tts_kwargs: dict[str, Any] = {
+        "api_key": eleven_api_key,
+        "voice_id": voice_id,
+        "model": eleven_model,
+        "voice_settings": elevenlabs.VoiceSettings(
+            stability=0.64,
+            similarity_boost=0.85,
+            style=0.18,
+            speed=0.92,
             use_speaker_boost=True,
         ),
-        auto_mode=False,
-        apply_text_normalization="off",
-    )
+        "auto_mode": False,
+    }
+    if "flash" in eleven_model or "turbo" in eleven_model:
+        tts_kwargs["language"] = "ko"
+        tts_kwargs["apply_text_normalization"] = "off"
+    tts_engine = elevenlabs.TTS(**tts_kwargs)
 
     # prewarm된 Silero VAD가 있으면 재사용하여 진입 시 ONNX 초기화 블로킹(150~250ms) 제거
     prewarmed_vad = getattr(ctx.proc, "userdata", {}).get("vad") if getattr(ctx, "proc", None) else None
