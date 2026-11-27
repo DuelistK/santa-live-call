@@ -11,6 +11,7 @@ export type SantaAvatarMode =
   | "heygen";
 
 export type SantaVoicePreset =
+  | "santa_kr"
   | "george"
   | "bill"
   | "brian"

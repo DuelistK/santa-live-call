@@ -128,11 +128,19 @@ const SANTA_VOICE_OPTIONS: Array<{
   sampleUrl: string;
 }> = [
   {
+    preset: "santa_kr",
+    shortLabel: "한국 산타 (1번)",
+    title: "한국 산타 · 새로 생성한 1번 보이스",
+    desc: "Voice Design으로 새로 제작한 한국어 전용 산타할아버지 (무료 즉시 작동)",
+    badge: "NEW ⭐",
+    sampleUrl: "/audio/voice-santa-kr.mp3",
+  },
+  {
     preset: "george",
     shortLabel: "조지 (동화성우)",
     title: "조지 · 따뜻한 동화구연 성우",
     desc: "실제 성우 녹음 · 포근한 구연동화 톤 (무료 즉시 작동)",
-    badge: "무료 추천",
+    badge: "무료",
     sampleUrl: "/audio/voice-george.mp3",
   },
   {
@@ -326,7 +334,7 @@ export default function HomePage() {
       mission: draft.mission.trim() || "밤 9시 전에 스스로 잠자리에 들기",
       giftHint: draft.giftHint.trim() || "크리스마스 깜짝 선물",
       avatarProvider: draft.avatarProvider || "anam",
-      voicePreset: draft.voicePreset || "george",
+      voicePreset: draft.voicePreset || "santa_kr",
     };
     setNote(cleaned);
     setIsSheetOpen(false);
@@ -496,13 +504,13 @@ export default function HomePage() {
                 onClick={() => {
                   const cur =
                     SANTA_VOICE_OPTIONS.find(
-                      (v) => v.preset === (note.voicePreset || "george")
+                      (v) => v.preset === (note.voicePreset || "santa_kr")
                     ) || SANTA_VOICE_OPTIONS[0];
                   toggleVoiceSample(cur.preset, cur.sampleUrl);
                 }}
                 className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#E5C158]/20 hover:bg-[#E5C158]/30 border border-[#E5C158]/50 text-[10px] font-bold text-[#F3DC99] transition active:scale-95"
               >
-                {playingVoicePreset === (note.voicePreset || "george") ? (
+                {playingVoicePreset === (note.voicePreset || "santa_kr") ? (
                   <>
                     <Square className="w-2.5 h-2.5 fill-current" />
                     <span>정지</span>
@@ -517,7 +525,7 @@ export default function HomePage() {
             </div>
             <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
               {SANTA_VOICE_OPTIONS.map((v) => {
-                const active = (note.voicePreset || "george") === v.preset;
+                const active = (note.voicePreset || "santa_kr") === v.preset;
                 return (
                   <button
                     key={v.preset}
@@ -546,8 +554,8 @@ export default function HomePage() {
                 );
               })}
             </div>
-            {((note.voicePreset || "george") === "namchun" ||
-              (note.voicePreset || "george") === "sungho") && (
+            {((note.voicePreset || "santa_kr") === "namchun" ||
+              (note.voicePreset || "santa_kr") === "sungho") && (
               <p className="px-1 text-[10px] text-[#F3DC99]/85 leading-snug">
                 💡 남춘·성호 한국인 성우는 계정에 등록 완료되었으며, ElevenLabs Starter($5/월) 플랜에서 실통화 API가 즉시 켜집니다(무료 플랜에서는 조지/빌 실제 성우로 자동 연결).
               </p>
@@ -1079,7 +1087,7 @@ export default function HomePage() {
               </label>
               <div className="space-y-1.5">
                 {SANTA_VOICE_OPTIONS.map((v) => {
-                  const selected = (draft.voicePreset || "george") === v.preset;
+                  const selected = (draft.voicePreset || "santa_kr") === v.preset;
                   return (
                     <div
                       key={v.preset}

@@ -137,7 +137,7 @@ class SecretSantaNote:
     mission: str = "밤에 일찍 자고 양치질을 깨끗이 하기"
     giftHint: str = "특별한 크리스마스 선물"
     avatarProvider: str = ""
-    voicePreset: str = "george"
+    voicePreset: str = "santa_kr"
     previousCallCount: int = 0
     lastPromise: str = ""
     lastGifts: str = ""
@@ -636,15 +636,16 @@ async def extract_gift_keywords_in_background(
 # 5-B. 실제 성우 보이스 프리셋 & ElevenLabs 구독 티어 자동 감지 (방법 2)
 # =====================================================================
 PREMADE_REAL_ACTOR_VOICES: dict[str, str] = {
-    "george": "JBFqnCBsd6RMkjVDRZzb",  # George - 따뜻한 동화구연 실제 성우 (무료/유료 즉시 작동)
-    "bill": "pqHfZKP75CvOlQylNhV4",    # Bill - 인자한 노년 남성 실제 성우 (무료/유료 즉시 작동)
-    "brian": "nPczCjzI2devNBz1zQrb",   # Brian - 깊고 중후한 중저음 실제 성우 (무료/유료 즉시 작동)
+    "santa_kr": "2uGLkMtcMeMQGcTp1GNS",  # Korean Santa Claus (사용자가 Voice Design으로 직접 생성한 1번 한국어 산타)
+    "george": "JBFqnCBsd6RMkjVDRZzb",    # George - 따뜻한 동화구연 실제 성우 (무료/유료 즉시 작동)
+    "bill": "pqHfZKP75CvOlQylNhV4",      # Bill - 인자한 노년 남성 실제 성우 (무료/유료 즉시 작동)
+    "brian": "nPczCjzI2devNBz1zQrb",     # Brian - 깊고 중후한 중저음 실제 성우 (무료/유료 즉시 작동)
 }
 
 KOREAN_LIBRARY_ACTOR_VOICES: dict[str, tuple[str, str]] = {
-    # (라이브러리 성우 Voice ID, 무료 플랜일 때 402 방지용 폴백 성우 Voice ID)
-    "namchun": ("5ON5Fnz24cnOozEQfGAm", "JBFqnCBsd6RMkjVDRZzb"),  # 남춘 할아버지 (한국인 노년 전문 성우)
-    "sungho": ("AgA5UKT9OrVg7jxVBZd4", "pqHfZKP75CvOlQylNhV4"),   # 성호 시니어 (한국인 중노년 성우)
+    # (라이브러리 성우 Voice ID, 무료 플랜일 때 402 방지용 폴백 Voice ID)
+    "namchun": ("5ON5Fnz24cnOozEQfGAm", "2uGLkMtcMeMQGcTp1GNS"),  # 남춘 할아버지 (한국인 노년 전문 성우)
+    "sungho": ("AgA5UKT9OrVg7jxVBZd4", "2uGLkMtcMeMQGcTp1GNS"),   # 성호 시니어 (한국인 중노년 성우)
 }
 
 _elevenlabs_tier_cache: tuple[float, str] = (0.0, "")
@@ -698,11 +699,11 @@ async def resolve_elevenlabs_voice_id(voice_preset: str, api_key: Optional[str])
         )
         return free_fallback_vid
 
-    # .env에 사용자가 직접 Instant Voice Clone ID를 넣은 경우 우선 사용 (이전 합성 generated 보이스 제외)
+    # .env에 사용자가 직접 커스텀 Voice ID를 넣은 경우 우선 사용 (이전 초기 합성 보이스 제외)
     if env_vid and not env_vid.startswith("your_") and env_vid != "VXR4iyFwKyoxxANCRsD5":
         return env_vid
 
-    return PREMADE_REAL_ACTOR_VOICES["george"]
+    return PREMADE_REAL_ACTOR_VOICES["santa_kr"]
 
 
 # =====================================================================
@@ -787,10 +788,10 @@ async def entrypoint(ctx: JobContext) -> None:
         "voice_id": voice_id,
         "model": eleven_model,
         "voice_settings": elevenlabs.VoiceSettings(
-            stability=0.64,
-            similarity_boost=0.85,
-            style=0.18,
-            speed=0.92,
+            stability=0.72,
+            similarity_boost=0.86,
+            style=0.08,
+            speed=0.93,
             use_speaker_boost=True,
         ),
         "auto_mode": False,
