@@ -10,14 +10,6 @@ export type SantaAvatarMode =
   | "lemonslice"
   | "heygen";
 
-export type SantaVoicePreset =
-  | "santa_kr"
-  | "george"
-  | "bill"
-  | "brian"
-  | "namchun"
-  | "sungho";
-
 export interface SantaMagicEvent {
   id: string;
   effect: SantaMagicEffectType;
@@ -39,7 +31,6 @@ export interface SecretSantaNote {
   mission: string;
   giftHint: string;
   avatarProvider?: SantaAvatarMode;
-  voicePreset?: SantaVoicePreset;
   previousMemory?: PreviousCallMemory;
 }
 

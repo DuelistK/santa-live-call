@@ -16,7 +16,6 @@ export const DEFAULT_SANTA_NOTE: SecretSantaNote = {
   mission: "밤에 일찍 잠자리에 들고 스스로 깨끗이 양치질하기",
   giftHint: "크리스마스 깜짝 선물",
   avatarProvider: "anam",
-  voicePreset: "santa_kr",
 };
 
 export const DEFAULT_SANTA_REPORT: SantaReportData = {
@@ -99,18 +98,7 @@ export function SantaSessionProvider({ children }: { children: React.ReactNode }
       if (savedProfiles) {
         const parsed = JSON.parse(savedProfiles) as ChildProfile[];
         if (Array.isArray(parsed) && parsed.length > 0) {
-          const migrated = window.localStorage.getItem("santa_voice_kr_v1_migrated");
-          if (!migrated) {
-            const updated = parsed.map((p) => ({
-              ...p,
-              note: { ...p.note, voicePreset: "santa_kr" as const },
-            }));
-            setProfiles(updated);
-            window.localStorage.setItem(STORAGE_PROFILES_KEY, JSON.stringify(updated));
-            window.localStorage.setItem("santa_voice_kr_v1_migrated", "1");
-          } else {
-            setProfiles(parsed);
-          }
+          setProfiles(parsed);
         }
       }
       const savedActiveId = window.localStorage.getItem(STORAGE_ACTIVE_PROFILE_KEY);
