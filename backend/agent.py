@@ -712,27 +712,34 @@ async def entrypoint(ctx: JobContext) -> None:
         llm_kwargs["thinking_config"] = {"thinking_level": "MINIMAL"}
     llm_engine = google.LLM(**llm_kwargs)
 
-    # - TTS: backend/.env에 연동된 산타 보이스 ID + 다국어 모델(eleven_multilingual_v2)
+    # - TTS: backend/.env에 연동된 산타 보이스 ID + Voice Design v3 원음 그대로 재현하는 eleven_v3_conversational
     eleven_api_key = os.getenv("ELEVENLABS_API_KEY") or os.getenv("ELEVEN_API_KEY")
     voice_id = get_elevenlabs_voice_id()
-    logger.info("Selected ElevenLabs voice_id=%s", voice_id)
-    eleven_model = os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2").strip()
+    eleven_model = os.getenv("ELEVENLABS_MODEL", "eleven_v3_conversational").strip()
+    logger.info("Selected ElevenLabs voice_id=%s (model=%s)", voice_id, eleven_model)
+    is_dialogue_model = eleven_model in (
+        "eleven_v3",
+        "eleven_v3_conversational",
+        "eleven_v4",
+        "eleven_v4_turbo",
+    )
     tts_kwargs: dict[str, Any] = {
         "api_key": eleven_api_key,
         "voice_id": voice_id,
         "model": eleven_model,
-        "voice_settings": elevenlabs.VoiceSettings(
+    }
+    if not is_dialogue_model:
+        tts_kwargs["voice_settings"] = elevenlabs.VoiceSettings(
             stability=0.72,
             similarity_boost=0.86,
             style=0.08,
             speed=0.93,
             use_speaker_boost=True,
-        ),
-        "auto_mode": False,
-    }
-    if "flash" in eleven_model or "turbo" in eleven_model:
-        tts_kwargs["language"] = "ko"
-        tts_kwargs["apply_text_normalization"] = "off"
+        )
+        tts_kwargs["auto_mode"] = False
+        if "flash" in eleven_model or "turbo" in eleven_model:
+            tts_kwargs["language"] = "ko"
+            tts_kwargs["apply_text_normalization"] = "off"
     tts_engine = elevenlabs.TTS(**tts_kwargs)
 
     # prewarm된 Silero VAD가 있으면 재사용하여 진입 시 ONNX 초기화 블로킹(150~250ms) 제거

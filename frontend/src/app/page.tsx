@@ -130,14 +130,14 @@ const VOICE_TUNING_SAMPLES: Array<{
   {
     key: "before",
     label: "튜닝 전 (원본)",
-    sublabel: "기본값 · 속도 1.0x",
-    sampleUrl: "/audio/santa-tuning-before.mp3",
+    sublabel: "Eleven v3 원음 그대로",
+    sampleUrl: "/audio/santa-tuning-before.mp3?v=2",
   },
   {
     key: "after",
     label: "튜닝 후 (현재 적용)",
-    sublabel: "부드러운 억양 + 중저음 EQ",
-    sampleUrl: "/audio/santa-tuning-after.mp3",
+    sublabel: "Eleven v3 + 중저음 EQ",
+    sampleUrl: "/audio/santa-tuning-after.mp3?v=2",
   },
 ];
 
